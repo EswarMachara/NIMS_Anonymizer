@@ -32,12 +32,13 @@
       <div>
         <span class="eyebrow">PII removal workflow · Runs fully offline</span>
         <h1>Renal Study Anonymizer</h1>
-        <p>Select one patient's eGFR or KFRE package, review the original files against the
-          anonymized output side by side, then approve the result. Nothing leaves this computer.</p>
+        <p>Select one patient's eGFR or KFRE package &mdash; or a folder holding many patients
+          &mdash; then cross-check the originals against the anonymized output side by side.
+          Nothing leaves this computer.</p>
       </div>
       <div class="anon-hero-steps" aria-label="Anonymization workflow">
         <div id="step-1" class="step-active"><span>1</span><strong>Select package</strong><small>Folder, files, or drag &amp; drop</small></div>
-        <div id="step-2"><span>2</span><strong>Preview output</strong><small>Original vs. anonymized</small></div>
+        <div id="step-2"><span>2</span><strong>Cross-check output</strong><small>Images, metadata &amp; reports</small></div>
         <div id="step-3"><span>3</span><strong>Approve</strong><small>Keep the anonymized package</small></div>
       </div>
     </section>
@@ -46,8 +47,10 @@
       <article class="panel-card anon-intro-card">
         <div class="anon-card-head">
           <span class="eyebrow">Expected input</span>
-          <h2>One patient package at a time</h2>
-          <p>Any of these layouts work — files are classified by content, not by folder name.</p>
+          <h2>One patient, or a whole folder of them</h2>
+          <p>Point at a single patient's folder, or at a folder containing many patient
+            subfolders &mdash; each is anonymized independently, with its own Anonymized ID.
+            Any of these layouts work; files are classified by content, not by folder name.</p>
         </div>
         <div class="anon-folder-tree" aria-label="Expected folder structure">
           <div><strong>Patient_Folder/</strong></div>
@@ -89,8 +92,9 @@
             <span class="upload-title">DROP PATIENT PACKAGE HERE</span>
             <span class="upload-subtitle">Or use one of the buttons below</span>
             <div class="upload-guidance">
-              <span><strong>Tip:</strong> "Choose Folder" is the most reliable option — it captures the whole
-                patient package (images + reports) in one action.</span>
+              <span><strong>Tip:</strong> "Choose Folder" is the most reliable option &mdash; it captures a whole
+                patient package (images + reports) in one action, and works just as well on a folder
+                containing many patients.</span>
             </div>
             <div class="package-upload-actions">
               <button type="button" class="package-upload-action" id="choose-folder-btn">Choose Folder</button>
@@ -101,6 +105,30 @@
         </div>
 
         <div class="result-banner hidden" id="result-banner"></div>
+
+        <!-- Batch mode: one row per patient, shown instead of the
+             single-patient file preview when a folder of many patients
+             was selected. -->
+        <section class="batch-results hidden" id="batch-results" aria-labelledby="batch-title">
+          <div class="batch-head">
+            <h3 id="batch-title">Patients processed</h3>
+            <p id="batch-summary"></p>
+          </div>
+          <div class="batch-table-scroll">
+            <table class="batch-table">
+              <thead>
+                <tr>
+                  <th scope="col">Patient folder</th>
+                  <th scope="col">Anonymized ID</th>
+                  <th scope="col">Files</th>
+                  <th scope="col">Status</th>
+                  <th scope="col"><span class="sr-only">Review</span></th>
+                </tr>
+              </thead>
+              <tbody id="batch-tbody"></tbody>
+            </table>
+          </div>
+        </section>
 
         <div class="anon-preview-grid hidden" id="preview-grid">
           <section class="anon-preview-panel" aria-labelledby="original-title">
@@ -118,12 +146,41 @@
         <div class="anon-actions">
           <button class="btn-secondary" id="reset-btn" type="button" disabled>Clear</button>
           <span class="spacer"></span>
+          <button class="btn-secondary" id="crosscheck-btn" type="button" disabled>Cross-check</button>
           <button class="btn-secondary" id="reveal-btn" type="button" disabled>Show output folder</button>
           <button class="btn-premium" id="approve-btn" type="button" disabled>Approve</button>
         </div>
       </article>
     </section>
   </main>
+
+  <!-- Cross-check review. Replaces the workbench view rather than opening a
+       second window, so the operator can never end up comparing one
+       patient's images against another patient's window. Every row is
+       fetched on demand as it scrolls into view (see app.js) -- a patient's
+       ten ultrasound frames are tens of megabytes decoded. -->
+  <section class="crosscheck hidden" id="crosscheck-page" aria-labelledby="crosscheck-heading">
+    <header class="crosscheck-topbar">
+      <button class="btn-secondary" id="crosscheck-back" type="button">&larr; Back</button>
+      <div class="crosscheck-title">
+        <h2 id="crosscheck-heading">Cross-check</h2>
+        <p id="crosscheck-subject"></p>
+      </div>
+      <span class="crosscheck-legend" aria-hidden="true">
+        <span><i class="swatch-original"></i> Original</span>
+        <span><i class="swatch-anon"></i> Anonymized</span>
+      </span>
+    </header>
+
+    <nav class="crosscheck-tabs" role="tablist" aria-label="What to compare">
+      <button type="button" role="tab" class="active" data-cc-tab="images" id="cc-tab-images">DCM Images</button>
+      <button type="button" role="tab" data-cc-tab="metadata" id="cc-tab-metadata">DCM Metadata</button>
+      <button type="button" role="tab" data-cc-tab="reports" id="cc-tab-reports">Reports</button>
+    </nav>
+
+    <p class="crosscheck-hint" id="crosscheck-hint"></p>
+    <div class="crosscheck-body" id="crosscheck-body"></div>
+  </section>
 
   <footer class="app-footer">
     <strong>Where things are kept:</strong> the anonymized output and the confidential ID-mapping file

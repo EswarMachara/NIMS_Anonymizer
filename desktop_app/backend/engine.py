@@ -418,6 +418,400 @@ def process_kfre_package(package_dir: str) -> Dict[str, Any]:
 
 
 # ==========================================================================
+# Cross-check review (original vs anonymized, side by side)
+# ==========================================================================
+
+# Previews are decoded, downscaled and base64'd across the JS bridge one row
+# at a time, on demand. A single patient's ten ultrasound frames are ~44 MB of
+# pixel data; inlining that into the page would stall the webview, so the UI
+# asks for each row only as it scrolls into view.
+PREVIEW_MAX_PX = 900
+PDF_PREVIEW_DPI = 110
+
+# Tags worth showing first in the metadata comparison: the ones that carry
+# identity, plus the UIDs the pipeline regenerates. Everything else follows,
+# so nothing is hidden -- this only controls ordering.
+CROSSCHECK_PRIORITY_TAGS = [
+    "PatientName", "PatientID", "PatientBirthDate", "PatientSex", "PatientAge",
+    "InstitutionName", "InstitutionAddress", "ReferringPhysicianName",
+    "PerformingPhysicianName", "OperatorsName", "StationName",
+    "StudyDate", "StudyTime", "AccessionNumber", "StudyID",
+    "StudyInstanceUID", "SeriesInstanceUID", "SOPInstanceUID",
+]
+
+
+def _png_data_uri(img: "Any") -> str:
+    """PIL image -> data: URI. PNG keeps the zeroed banner crisp (a JPEG
+    would add ringing along the redaction boundary, which is exactly the
+    edge the reviewer is trying to judge)."""
+    import base64
+    import io
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def render_dicom_preview(path: str, max_px: int = PREVIEW_MAX_PX) -> Dict[str, Any]:
+    """
+    One DICOM frame as a viewable PNG data URI.
+
+    Ultrasound frames are usually colour-encoded as YBR (that is what JPEG
+    Baseline carries); handing those raw bytes to PIL renders them with a
+    green/magenta cast, which would make a reviewer distrust a correctly
+    anonymized image. So the photometric interpretation is honoured
+    explicitly. Multi-frame files show their first frame -- the burned-in
+    banner is identical across frames.
+    """
+    import numpy as np
+    import pydicom
+    from PIL import Image
+
+    try:
+        ds = pydicom.dcmread(path)
+        arr = ds.pixel_array
+        photometric = str(getattr(ds, "PhotometricInterpretation", "") or "")
+
+        if arr.ndim == 4 or (arr.ndim == 3 and photometric.startswith("YBR") is False and arr.shape[-1] not in (3, 4) and getattr(ds, "NumberOfFrames", 1) not in (1, "1", None)):
+            arr = arr[0]  # multi-frame: first frame only
+
+        if photometric.startswith("YBR"):
+            from pydicom.pixels import convert_color_space
+            arr = convert_color_space(arr, photometric, "RGB")
+
+        if arr.dtype != np.uint8:
+            lo, hi = float(np.min(arr)), float(np.max(arr))
+            arr = np.zeros_like(arr, dtype=np.uint8) if hi <= lo else \
+                (((arr.astype(np.float32) - lo) / (hi - lo)) * 255.0).astype(np.uint8)
+
+        img = Image.fromarray(arr)
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        img.thumbnail((max_px, max_px), Image.LANCZOS)
+        return {"ok": True, "data_uri": _png_data_uri(img), "label": os.path.basename(path)}
+    except Exception as exc:  # noqa: BLE001 -- a preview failure must never look like a redaction failure
+        return {"ok": False, "error": f"Could not render this image: {exc}", "label": os.path.basename(path)}
+
+
+def render_pdf_preview(path: str, page_index: int = 0, dpi: int = PDF_PREVIEW_DPI) -> Dict[str, Any]:
+    """One PDF page as a PNG data URI, via the PyMuPDF already used for
+    redaction (no extra dependency). page_count is returned so the UI can
+    offer every page rather than assuming single-page reports."""
+    try:
+        import fitz
+
+        doc = fitz.open(path)
+        try:
+            page_count = doc.page_count
+            if page_count == 0:
+                return {"ok": False, "error": "This PDF has no pages.", "label": os.path.basename(path)}
+            index = max(0, min(page_index, page_count - 1))
+            pix = doc.load_page(index).get_pixmap(dpi=dpi)
+            import base64
+            return {
+                "ok": True,
+                "data_uri": "data:image/png;base64," + base64.b64encode(pix.tobytes("png")).decode("ascii"),
+                "label": os.path.basename(path),
+                "page_index": index,
+                "page_count": page_count,
+            }
+        finally:
+            doc.close()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"Could not render this report: {exc}", "label": os.path.basename(path)}
+
+
+def get_dicom_metadata_pair(original_path: str, anonymized_path: str) -> Dict[str, Any]:
+    """
+    Tag-by-tag comparison of one DICOM before and after anonymization.
+
+    Reads headers only (stop_before_pixels) so opening the metadata tab is
+    instant. Every tag present in EITHER file is listed -- a tag that the
+    pipeline removed outright must still be visible as "removed", otherwise
+    the reviewer cannot tell removal apart from it never having been there.
+    Private tags are included: remove_private_tags() is part of what is
+    being verified.
+    """
+    import pydicom
+
+    try:
+        src = pydicom.dcmread(original_path, stop_before_pixels=True)
+        out = pydicom.dcmread(anonymized_path, stop_before_pixels=True)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"Could not read DICOM metadata: {exc}"}
+
+    def flatten(ds) -> Dict[str, Dict[str, str]]:
+        found: Dict[str, Dict[str, str]] = {}
+        for elem in ds:
+            if elem.tag.group == 0x7FE0:  # pixel data -- compared visually, not as text
+                continue
+            key = f"({elem.tag.group:04X},{elem.tag.element:04X})"
+            try:
+                value = "" if elem.value is None else str(elem.value)
+            except Exception:  # noqa: BLE001
+                value = "<unreadable>"
+            found[key] = {
+                "tag": key,
+                "keyword": (elem.keyword or elem.name or ""),
+                "value": value[:400],
+            }
+        return found
+
+    src_tags, out_tags = flatten(src), flatten(out)
+
+    rows = []
+    for key in set(src_tags) | set(out_tags):
+        s = src_tags.get(key)
+        o = out_tags.get(key)
+        keyword = (s or o or {}).get("keyword", "")
+        original_value = s["value"] if s else None
+        anon_value = o["value"] if o else None
+        if s and not o:
+            status = "removed"
+        elif o and not s:
+            status = "added"
+        elif original_value == anon_value:
+            status = "unchanged"
+        else:
+            status = "changed"
+        rows.append({
+            "tag": key,
+            "keyword": keyword,
+            "original": original_value,
+            "anonymized": anon_value,
+            "status": status,
+        })
+
+    priority = {name: i for i, name in enumerate(CROSSCHECK_PRIORITY_TAGS)}
+    rows.sort(key=lambda r: (priority.get(r["keyword"], len(priority)), r["keyword"] or r["tag"]))
+
+    return {
+        "ok": True,
+        "rows": rows,
+        "counts": {
+            "changed": sum(1 for r in rows if r["status"] == "changed"),
+            "removed": sum(1 for r in rows if r["status"] == "removed"),
+            "unchanged": sum(1 for r in rows if r["status"] == "unchanged"),
+            "added": sum(1 for r in rows if r["status"] == "added"),
+        },
+    }
+
+
+def get_crosscheck_manifest(preview_pairs: List[Dict[str, str]]) -> Dict[str, Any]:
+    """
+    Split one patient's original/anonymized pairs into the three review
+    categories the cross-check screen offers, keeping each list in a stable
+    order so "scroll to the end" means the same thing every time.
+
+    Images and metadata are the SAME .dcm pairs viewed two ways (pixels vs
+    header), so both tabs are driven by one list rather than re-deriving it.
+    Only pairs whose BOTH sides exist on disk are offered -- a row the
+    reviewer cannot actually compare is worse than no row.
+    """
+    images, reports = [], []
+    for pair in preview_pairs:
+        original, output = pair.get("original", ""), pair.get("output", "")
+        if not (original and output and os.path.exists(original) and os.path.exists(output)):
+            continue
+        entry = {
+            "original": original,
+            "output": output,
+            "label": os.path.basename(original),
+            "output_label": os.path.basename(output),
+            "category": pair.get("category", ""),
+        }
+        if original.lower().endswith(".dcm"):
+            images.append(entry)
+        elif original.lower().endswith(".pdf"):
+            reports.append(entry)
+
+    return {
+        "images": images,
+        "metadata": list(images),
+        "reports": reports,
+        "counts": {"images": len(images), "metadata": len(images), "reports": len(reports)},
+    }
+
+
+# ==========================================================================
+# Batch processing (a folder holding MANY patients)
+# ==========================================================================
+
+
+def _patient_subfolders(parent_dir: str) -> List[str]:
+    """
+    Every immediate subdirectory, treated as a candidate patient package.
+
+    Deliberately NOT eg.find_patient_folders(), which filters on
+    NP_FOLDER_RE (r"NP\\s*0*(\\d+)") -- that matches this project's own
+    research-corpus naming ("NP1 (CKD)") but would silently SKIP a
+    hospital's real folders if they are named by MRN, date, or anything
+    else. Silently processing 3 of 10 patients is a far worse failure here
+    than trying a folder that turns out to hold nothing usable, which is
+    reported per-patient anyway.
+    """
+    try:
+        return [
+            os.path.join(parent_dir, name)
+            for name in sorted(os.listdir(parent_dir))
+            if os.path.isdir(os.path.join(parent_dir, name))
+        ]
+    except OSError:
+        return []
+
+
+def _batch_summary(patients: List[Dict[str, Any]]) -> Dict[str, int]:
+    return {
+        "total": len(patients),
+        "succeeded": sum(1 for p in patients if p.get("success")),
+        "failed": sum(1 for p in patients if not p.get("success")),
+        "new_ids": sum(1 for p in patients if p.get("is_new_id")),
+        "reused_ids": sum(1 for p in patients if p.get("anon_id") and not p.get("is_new_id")),
+    }
+
+
+def process_egfr_batch(parent_dir: str) -> Dict[str, Any]:
+    """
+    Run every patient subfolder under parent_dir through the SAME
+    single-patient path, independently: each resolves its own identity and
+    gets its own Anonymized ID, exactly as the batch CLI does. That
+    independence is the safety property -- two patients can never end up
+    merged under one ID because nothing is ever resolved across subfolder
+    boundaries. One patient failing does not abort the others; its errors
+    are reported in its own row.
+    """
+    patients: List[Dict[str, Any]] = []
+    for sub in _patient_subfolders(parent_dir):
+        try:
+            result = process_egfr_package(sub)
+        except Exception as exc:  # noqa: BLE001 -- one bad folder must not kill the run
+            result = {"success": False, "study": "egfr", "errors": [f"Unexpected error: {exc}"]}
+        result["source"] = os.path.basename(sub.rstrip(os.sep))
+        result["source_path"] = sub
+        patients.append(result)
+
+    return {
+        "success": bool(patients) and all(p.get("success") for p in patients),
+        "batch": True,
+        "study": "egfr",
+        "patients": patients,
+        "summary": _batch_summary(patients),
+        "mapping_csv_path": get_mapping_csv_path("egfr"),
+        "output_dir": get_output_root("egfr"),
+        "errors": [] if patients else ["No patient subfolders were found in the selected folder."],
+    }
+
+
+def process_kfre_batch(parent_dir: str) -> Dict[str, Any]:
+    """
+    KFRE needs no subfolder walk: classify_input_file() + group_by_identity()
+    already partition every PDF found anywhere under the selection into one
+    group per patient (identity comes from PDF CONTENT, never from folder
+    layout -- see anonymize_KFRE.find_input_pdfs()'s own note). So the whole
+    selection is processed in one pass and reported one row per group.
+    """
+    mapping_csv_path = get_mapping_csv_path("kfre")
+    output_root = get_output_root("kfre")
+
+    pdf_paths = ac.find_pdfs_recursive(parent_dir)
+    if not pdf_paths:
+        return {
+            "success": False,
+            "batch": True,
+            "study": "kfre",
+            "patients": [],
+            "summary": _batch_summary([]),
+            "errors": ["No PDF files were found anywhere in the selected folder."],
+        }
+
+    records = [kf.classify_input_file(p) for p in pdf_paths]
+    unrecognized = [r for r in records if r.template == "unrecognized"]
+    scanned = [r for r in records if r.template == "scanned_no_pii"]
+    a_or_b = [r for r in records if r.template in ("A", "B")]
+    missing_key = [r for r in a_or_b if r.identity_key is None]
+    groups = kf.group_by_identity([r for r in a_or_b if r.identity_key is not None])
+
+    # Files that belong to NO patient group are reported once at batch level
+    # rather than being silently attached to an arbitrary patient's row.
+    batch_errors = [
+        f"Unrecognized file (not a known report template, not scanned/no-PII): {os.path.basename(r.src_path)}"
+        for r in unrecognized
+    ] + [
+        f"No identity key (CR No / Lab No.) could be extracted from: {os.path.basename(r.src_path)}"
+        for r in missing_key
+    ]
+
+    if not groups:
+        batch_errors.insert(0, "No file in this folder could be matched to a stable identity key (CR No / Lab No.).")
+        return {
+            "success": False,
+            "batch": True,
+            "study": "kfre",
+            "patients": [],
+            "summary": _batch_summary([]),
+            "errors": batch_errors,
+        }
+
+    mapping = ac.MappingStore.load_or_create(mapping_csv_path)
+    assigned = []
+    for group in groups:
+        anon_id, is_new = mapping.get_or_assign(original_key=group.identity_key, name=group.patient_name)
+        assigned.append((group, anon_id, is_new))
+
+    os.makedirs(output_root, exist_ok=True)
+    exit_code = kf._run_redaction_and_save(groups, mapping, output_root)  # also calls mapping.save()
+
+    # Scanned/no-PII files carry no identity, so they cannot be attributed to
+    # a patient -- copied once, reported at batch level (same as the CLI).
+    scanned_pairs = []
+    for rec in scanned:
+        dst = os.path.join(output_root, rec.filename)
+        ac.safe_copy_bytes(rec.src_path, dst)
+        scanned_pairs.append({
+            "original": rec.src_path,
+            "output": dst,
+            "category": "Scanned, no extractable PII -- copied unchanged",
+        })
+
+    patients: List[Dict[str, Any]] = []
+    for group, anon_id, is_new in assigned:
+        pairs = [{
+            "original": rec.src_path,
+            "output": os.path.join(output_root, f"{anon_id}_{rec.filename}"),
+            "category": "Clinical / lab report",
+        } for rec in group.files]
+        written = _only_written_pairs(pairs)
+        patients.append({
+            "success": exit_code == 0 and len(written) == len(pairs),
+            "study": "kfre",
+            "source": f"{group.identity_key_kind} {group.identity_key}",
+            "source_path": os.path.dirname(group.files[0].src_path) if group.files else parent_dir,
+            "anon_id": anon_id,
+            "is_new_id": is_new,
+            "identity_kind": group.identity_key_kind,
+            "output_dir": output_root,
+            "mapping_csv_path": mapping_csv_path,
+            "errors": [] if len(written) == len(pairs) else [
+                f"{len(pairs) - len(written)} of {len(pairs)} report(s) were not written for this patient."
+            ],
+            "failed_pdfs": [],
+            "preview_pairs": written,
+        })
+
+    return {
+        "success": exit_code == 0 and not batch_errors and all(p["success"] for p in patients),
+        "batch": True,
+        "study": "kfre",
+        "patients": patients,
+        "summary": _batch_summary(patients),
+        "mapping_csv_path": mapping_csv_path,
+        "output_dir": output_root,
+        "errors": batch_errors,
+        "unattributed_pairs": scanned_pairs,
+    }
+
+
+# ==========================================================================
 # Entry point used by the GUI bridge
 # ==========================================================================
 
@@ -437,6 +831,36 @@ def process_package(paths: List[str], is_folder: bool, study_override: Optional[
             package_dir = staging_dir
 
         study = study_override or detect_study_type(package_dir)
+
+        # Single patient or a folder of many? Decided from what the reports
+        # actually contain, never from folder names or nesting depth: a
+        # single patient's own package legitimately has several subfolders
+        # (Left_Kidney_Images/, Lab_Reports/, ...), so any structural
+        # heuristic would misclassify it. Identity resolution is PDF-text
+        # only -- the expensive DICOM work happens later, on write -- so
+        # asking first is cheap.
+        #
+        # Only ever applies to a folder selection: a "Choose Files" staging
+        # directory is one patient's files by construction.
+        if is_folder:
+            if study == "egfr":
+                probe = eg.resolve_patient_identity(package_dir, ac.MappingStore.load_or_create(
+                    get_mapping_csv_path("egfr")), [])
+                _kind, values = _distinct_identity_values(probe)
+                if len(values) > 1:
+                    result = process_egfr_batch(package_dir)
+                    result["study_detected"] = study
+                    return result
+            else:
+                probe_records = [kf.classify_input_file(p) for p in ac.find_pdfs_recursive(package_dir)]
+                probe_groups = kf.group_by_identity(
+                    [r for r in probe_records if r.template in ("A", "B") and r.identity_key is not None]
+                )
+                if len(probe_groups) > 1:
+                    result = process_kfre_batch(package_dir)
+                    result["study_detected"] = study
+                    return result
+
         if study == "egfr":
             result = process_egfr_package(package_dir)
         else:

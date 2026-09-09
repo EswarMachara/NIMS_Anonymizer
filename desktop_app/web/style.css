@@ -544,6 +544,265 @@ button {
   cursor: pointer;
 }
 
+/* ---- Batch results (a folder of many patients) ---- */
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0);
+  white-space: nowrap; border: 0;
+}
+
+.batch-results { margin: 1.4rem 0 0.4rem; }
+.batch-head h3 { margin: 0 0 0.35rem; color: #082f37; font-size: 1.1rem; }
+.batch-head p { margin: 0 0 1rem; color: var(--text-secondary); font-size: 0.88rem; line-height: 1.6; }
+
+.batch-table-scroll {
+  overflow-x: auto;
+  border: 1px solid rgba(10, 107, 111, 0.16);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+}
+
+.batch-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.batch-table th {
+  text-align: left;
+  padding: 0.85rem 1.1rem;
+  background: linear-gradient(135deg, #f8ffff 0%, #eef9f7 100%);
+  border-bottom: 1px solid rgba(10, 107, 111, 0.16);
+  color: #073f45;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.batch-table td { padding: 0.9rem 1.1rem; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+.batch-table tbody tr:last-child td { border-bottom: 0; }
+.batch-table td small { display: block; margin-top: 0.2rem; color: #64748b; font-size: 0.75rem; }
+.batch-table .anon-id-pill { border-color: rgba(20, 134, 140, 0.4); }
+
+.batch-row-problem td { background: #fffbeb; }
+.batch-row-errors td { padding-top: 0; background: #fffbeb; border-bottom: 1px solid #f1f5f9; }
+.batch-row-errors ul { margin: 0 0 0.5rem; padding-left: 1.2rem; color: #92400e; font-size: 0.84rem; line-height: 1.6; }
+
+.batch-status {
+  display: inline-block;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+.batch-status.ok   { background: #ecfdf5; color: #065f46; border: 1px solid rgba(14, 159, 110, 0.35); }
+.batch-status.warn { background: #fffbeb; color: #92400e; border: 1px solid rgba(217, 119, 6, 0.35); }
+.batch-status.fail { background: var(--danger-bg); color: #991b1b; border: 1px solid rgba(220, 38, 38, 0.3); }
+
+.batch-row-actions { text-align: right; white-space: nowrap; }
+
+.result-banner.warn {
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  background: #fffbeb;
+  color: #92400e;
+}
+
+/* ---- Cross-check review page ---- */
+
+.crosscheck {
+  width: min(1600px, calc(100% - 4rem));
+  margin: 0 auto;
+  padding: clamp(1.2rem, 3vw, 2rem) 0 3rem;
+}
+
+.crosscheck-topbar {
+  display: flex;
+  align-items: center;
+  gap: 1.2rem;
+  flex-wrap: wrap;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(10, 107, 111, 0.16);
+}
+
+.crosscheck-title { flex: 1; min-width: 240px; }
+.crosscheck-title h2 { margin: 0; color: #073f45; font-size: clamp(1.2rem, 2vw, 1.5rem); letter-spacing: -0.02em; }
+.crosscheck-title p { margin: 0.2rem 0 0; color: var(--text-secondary); font-size: 0.9rem; }
+
+.crosscheck-legend { display: flex; gap: 1rem; font-size: 0.8rem; color: var(--text-secondary); font-weight: 700; }
+.crosscheck-legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+.crosscheck-legend i { width: 12px; height: 12px; border-radius: 4px; display: inline-block; }
+.swatch-original { background: #cbd5e1; }
+.swatch-anon { background: #0f9a87; }
+
+.crosscheck-tabs { display: flex; gap: 0.6rem; margin: 1.2rem 0 0.8rem; flex-wrap: wrap; }
+.crosscheck-tabs button {
+  border: 1.5px solid #d6e7e7;
+  border-radius: 12px;
+  background: #f8fbfb;
+  color: var(--text-secondary);
+  font-weight: 700;
+  padding: 0.7rem 1.2rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.crosscheck-tabs button.active {
+  border-color: #0f9a87;
+  background: #eef9f7;
+  color: var(--teal-dark);
+  box-shadow: 0 8px 18px rgba(15, 154, 135, 0.12);
+}
+.crosscheck-tabs button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.crosscheck-hint {
+  margin: 0 0 1.4rem;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid rgba(14, 106, 111, 0.18);
+  border-left: 4px solid #0a9f95;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(240, 250, 251, 0.96), rgba(255, 255, 255, 0.94));
+  color: #0a4a4e;
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
+
+.cc-empty { color: var(--text-secondary); font-size: 0.92rem; }
+
+.cc-row {
+  margin-bottom: 1.6rem;
+  padding: 1.2rem 1.3rem 1.3rem;
+  border: 1px solid rgba(10, 107, 111, 0.14);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+}
+
+.cc-row h4 {
+  margin: 0 0 0.9rem;
+  color: #082f37;
+  font-size: 0.98rem;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+.cc-row h4 small { color: #64748b; font-weight: 400; font-size: 0.8rem; }
+.cc-row-num {
+  flex: none;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: #eef9f7;
+  color: var(--teal-dark);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.cc-panes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.2rem; }
+.cc-panes > .cc-md, .cc-panes > .cc-loading, .cc-panes > .cc-error, .cc-panes > .cc-note {
+  grid-column: 1 / -1;
+}
+
+.cc-pane { margin: 0; }
+.cc-pane figcaption {
+  margin-bottom: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.cc-pane figcaption small {
+  display: block;
+  margin-top: 0.15rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #94a3b8;
+  overflow-wrap: anywhere;
+}
+.cc-pane-original figcaption { color: #475569; }
+.cc-pane-anon figcaption { color: var(--teal-dark); }
+
+.cc-pane img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  background: #0b1220;   /* ultrasound frames are mostly black; a dark mat
+                            keeps the zeroed banner readable as redaction
+                            rather than looking like a broken image */
+  border: 1px solid #e2e8f0;
+}
+.cc-pane-anon img { border-color: rgba(15, 154, 135, 0.45); }
+
+.cc-loading { margin: 0; color: #94a3b8; font-size: 0.86rem; }
+.cc-note { margin: 0.8rem 0 0; color: var(--text-secondary); font-size: 0.82rem; }
+.cc-error {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border-radius: 10px;
+  background: var(--danger-bg);
+  color: #991b1b;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/* ---- Cross-check: DICOM metadata table ---- */
+
+.cc-md-counts { margin: 0 0 0.8rem; color: var(--text-secondary); font-size: 0.85rem; }
+.cc-md-counts strong { color: #073f45; }
+
+.md-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.md-table th {
+  text-align: left;
+  padding: 0.6rem 0.8rem;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+  color: #475569;
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.md-table td {
+  padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.md-table td code { font-size: 0.78rem; color: #0a6b6f; }
+.md-table td small { display: block; margin-top: 0.15rem; color: #64748b; font-size: 0.72rem; }
+.md-table em { color: #94a3b8; }
+
+.md-changed td { background: #f0fdfa; }
+.md-removed td { background: #fffbeb; }
+
+.md-badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.md-badge-changed   { background: #ccfbf1; color: #0f766e; }
+.md-badge-removed   { background: #fef3c7; color: #92400e; }
+.md-badge-added     { background: #e0e7ff; color: #3730a3; }
+.md-badge-unchanged { background: #f1f5f9; color: #64748b; }
+
+.cc-md-unchanged { margin-top: 1rem; }
+.cc-md-unchanged summary {
+  cursor: pointer;
+  padding: 0.55rem 0.8rem;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+@media (max-width: 1100px) {
+  .cc-panes { grid-template-columns: 1fr; }
+}
+
 .hidden { display: none !important; }
 
 @media (max-width: 860px) {

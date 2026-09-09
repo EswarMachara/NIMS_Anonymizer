@@ -104,6 +104,26 @@ class Api:
                 "traceback": traceback.format_exc(),
             }
 
+    # ---- Cross-check review -------------------------------------------
+    # Each preview row is fetched on demand as it scrolls into view rather
+    # than all at once: one patient's ten ultrasound frames decode to tens
+    # of megabytes, and inlining that into the page would stall the webview.
+
+    def get_crosscheck_manifest(self, preview_pairs):
+        try:
+            return {"success": True, **engine.get_crosscheck_manifest(preview_pairs or [])}
+        except Exception as exc:  # noqa: BLE001
+            return {"success": False, "errors": [f"Could not build the cross-check list: {exc}"]}
+
+    def render_dicom_preview(self, path):
+        return engine.render_dicom_preview(path)
+
+    def render_pdf_preview(self, path, page_index=0):
+        return engine.render_pdf_preview(path, int(page_index or 0))
+
+    def get_dicom_metadata_pair(self, original_path, anonymized_path):
+        return engine.get_dicom_metadata_pair(original_path, anonymized_path)
+
     def reveal_in_explorer(self, path):
         """Open the OS file browser at `path` (or its parent folder, if
         `path` is a file) -- lets the operator jump straight to the

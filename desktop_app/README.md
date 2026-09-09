@@ -104,12 +104,34 @@ desktop_app/
   convention. `anon_common.find_pdfs_recursive()` walks the whole selected
   folder; file *type* is always determined by content (DICOM tags / PDF
   template detection), never by which subfolder it happened to sit in.
-- **One patient per run.** The batch CLI scripts (`anonymize_eGFR.py
-  --input-dir eGFR`) process a whole folder of many numbered patients at
-  once with a ranged output-folder name (`eGFR_1_20`). This app processes
-  one interactively-selected package at a time, so output just accumulates
-  into one persistent `Anonymized_eGFR/<AnonID>/` folder per patient —
-  no ranged naming needed here.
+- **One patient or many, auto-detected.** Point the app at a single
+  patient's folder, or at a folder holding many patient subfolders (the
+  same corpus layout the batch CLI's `--input-dir` takes). Which one it is
+  is decided from what the reports actually contain — identity resolution
+  is run first, and more than one distinct CR No / Lab No. means a batch —
+  never from folder names or nesting depth, since a single patient's own
+  package legitimately contains several subfolders.
+
+  In batch mode every patient subfolder is resolved **independently**: its
+  own identity, its own Anonymized ID. That independence is the safety
+  property — nothing is ever resolved across subfolder boundaries, so two
+  patients cannot be merged under one ID. One patient failing does not
+  abort the rest; its errors are reported on its own row. Note the app
+  enumerates *all* subfolders rather than reusing the CLI's
+  `find_patient_folders()`, which filters on `NP_FOLDER_RE` and would
+  silently skip a hospital's MRN- or date-named folders.
+
+  Output accumulates into one persistent `Anonymized_eGFR/<AnonID>/`
+  folder per patient — no ranged naming (`eGFR_1_20`) needed here.
+
+- **Cross-check before you rely on it.** The Cross-check screen compares
+  one patient's originals against the anonymized copies in three ways:
+  **DCM Images** (rendered side by side — the only way to confirm the
+  burned-in banner that ultrasound machines print into the *pixels* was
+  actually blanked; clearing tags does not touch it), **DCM Metadata**
+  (tag by tag, changed/removed listed first) and **Reports** (PDF pages
+  side by side). Rows are decoded on demand as they scroll into view — one
+  patient's ten frames are tens of megabytes decoded.
 - **"Choose Files" staging.** A native multi-file dialog only lets you pick
   from one folder at a time, so `stage_selected_files()` reconstructs
   enough folder structure (kidney-side subfolders preserved by name) in a
