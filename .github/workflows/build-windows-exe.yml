@@ -54,13 +54,25 @@ jobs:
         # (Process 1); with no decoder plugin installed, pydicom fails every
         # single one and the app writes the report PDFs but ZERO images --
         # silently, since nothing crashes. Fail the build here instead.
-        working-directory: desktop_app
-        run: >
-          python -c "from pydicom.pixels import get_decoder;
-          from pydicom.uid import JPEGBaseline8Bit;
-          p = get_decoder(JPEGBaseline8Bit).available_plugins;
-          print('JPEG Baseline decoder plugins:', p);
-          raise SystemExit('NO DICOM JPEG DECODER AVAILABLE -- every ultrasound image would silently fail to anonymize') if not p else None"
+        #
+        # Uses `shell: python` rather than a `python -c` one-liner: cramming
+        # this into one line previously produced `raise (X if cond else None)`,
+        # which raised TypeError on the SUCCESS path -- a guard that failed
+        # precisely when it should have passed.
+        shell: python
+        run: |
+          import sys
+
+          from pydicom.pixels import get_decoder
+          from pydicom.uid import JPEGBaseline8Bit
+
+          plugins = get_decoder(JPEGBaseline8Bit).available_plugins
+          print("JPEG Baseline decoder plugins:", plugins)
+          if not plugins:
+              sys.exit(
+                  "NO DICOM JPEG DECODER AVAILABLE -- every ultrasound image would "
+                  "silently fail to anonymize while the report PDFs still succeeded"
+              )
 
       - name: Sanity-check the backend imports cleanly
         # Exercises the same anon_common / anonymize_eGFR / anonymize_KFRE
@@ -96,13 +108,19 @@ jobs:
           # copy_metadata because pydicom imports them dynamically. Confirm
           # they actually landed in the bundle -- a build missing them still
           # runs, and still anonymizes PDFs, but drops every ultrasound image.
+          #
+          # Matched by signature rather than by expected folder layout:
+          # PyInstaller may ship these as a package directory OR as loose C
+          # extensions at the _internal root (_imaging.cp312-win_amd64.pyd,
+          # _libjpeg.cp312-win_amd64.pyd), and asserting one specific layout
+          # would fail the build for a bundle that is actually fine.
           $internal = "dist/TANUH-Renal-Anonymizer/_internal"
-          $pil      = Test-Path "$internal/PIL"
-          $libjpeg  = @(Get-ChildItem $internal -Recurse -Filter "*libjpeg*" -ErrorAction SilentlyContinue).Count
-          $pylj     = Test-Path "$internal/pylibjpeg"
-          Write-Host "bundled decoders -> PIL: $pil | pylibjpeg: $pylj | libjpeg files: $libjpeg"
-          if (-not $pil -and -not $pylj) {
-            throw "No DICOM JPEG decoder was bundled into the build -- ultrasound images would silently fail to anonymize"
+          $names = @(Get-ChildItem $internal -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+          $pilHits = @($names | Where-Object { $_ -match "^PIL$|_imaging" }).Count
+          $ljHits  = @($names | Where-Object { $_ -match "libjpeg|^pylibjpeg$" }).Count
+          Write-Host "bundled decoder evidence -> pillow: $pilHits match(es) | pylibjpeg: $ljHits match(es)"
+          if ($pilHits -eq 0 -and $ljHits -eq 0) {
+            throw "No DICOM JPEG decoder was bundled into the build -- every ultrasound image would silently fail to anonymize"
           }
 
       - name: Upload build artifact
