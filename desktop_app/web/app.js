@@ -154,17 +154,34 @@ function renderSession(info) {
   } else {
     els.csvState.textContent = csvChosen ? "Empty file" : "New mapping";
     els.csvState.className = `session-state ${csvChosen ? "is-warn" : ""}`;
-    els.csvHint.textContent = csvChosen
-      ? "This file has no patients in it yet, so nothing can be matched as a follow-up. If you meant to continue an earlier session, pick that session's CSV instead."
-      : "No previous mapping loaded, so every patient here counts as new. Continuing an earlier session? Load its CSV first.";
+    if (csvChosen) {
+      els.csvHint.textContent =
+        "This file has no patients in it yet, so nothing can be matched as a follow-up. If you meant to continue an earlier session, pick that session's CSV instead.";
+    } else if (info.mapping_csv_beside_output) {
+      // Placed next to the anonymized folder rather than inside it: that
+      // folder stays safe to hand over, but the one above it now holds
+      // real names and CR numbers, so it must not be shared wholesale.
+      els.csvHint.textContent =
+        "Will be created next to your output folder, not inside it. Keep this file: next time, load it so returning " +
+        "patients keep the same ID. Share only the Anonymized_ subfolder, never the folder holding this CSV.";
+    } else {
+      els.csvHint.textContent =
+        "No previous mapping loaded, so every patient here counts as new. Continuing an earlier session? Load its CSV first.";
+    }
   }
+}
+
+function syncHintTitles() {
+  // The hint is line-clamped on short windows, so mirror it into the title
+  // where the full wording stays reachable on hover.
+  if (els.csvHint) els.csvHint.title = els.csvHint.textContent || "";
 }
 
 async function refreshSession() {
   try {
     const info = await window.pywebview.api.describe_session(
       state.mappingCsv, state.outputDir, state.studyOverride || "egfr");
-    if (info && info.success !== false) renderSession(info);
+    if (info && info.success !== false) { renderSession(info); syncHintTitles(); }
   } catch (err) {
     console.error("describe_session failed", err);
   }

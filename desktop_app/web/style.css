@@ -1271,6 +1271,28 @@ body.ready .scroll-cue { opacity: 1; }
    Two breakpoints so the change is gradual instead of one hard jump. */
 
 @media (max-height: 940px) {
+  /* The two session boxes are the biggest fixed block in the tool card, so
+     they collapse to a single compact row each: label and state on one
+     line, path and button on the next, explanatory hint dropped (it is
+     still the accessible title on the path). That alone recovers roughly
+     the height of the action row. */
+  .session-box { padding: 0.7rem 0.8rem; }
+  /* Clamped rather than hidden: this line carries the "keep this file" and
+     "share only the Anonymized_ subfolder" guidance, which is the last
+     thing to drop on a small screen. Full text stays available as the
+     element's title. */
+  .session-box .session-hint {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin-bottom: 0.4rem;
+    font-size: 0.72rem;
+    line-height: 1.4;
+  }
+  .session-box-head { margin-bottom: 0.35rem; }
+  .session-path { margin-bottom: 0.45rem; padding: 0.3rem 0.45rem; font-size: 0.7rem; }
+  .session-inputs { gap: 0.6rem; }
   .anon-card-head h2 { font-size: 1.18rem; }
   .anon-card-head p { font-size: 0.88rem; line-height: 1.5; }
   .layout-note, .layout-foot { font-size: 0.78rem; line-height: 1.45; }
@@ -1283,6 +1305,24 @@ body.ready .scroll-cue { opacity: 1; }
   .package-upload-action { padding: 0.6rem 1.1rem; font-size: 0.84rem; }
   .anon-status-card { min-height: 34px; padding: 0.6rem 0.8rem; font-size: 0.82rem; }
   .anon-actions { gap: 0.7rem; }
+
+  /* These two are the last ~180px, and both restate something already on
+     screen: the Tip says "Choose Folder is the most reliable option", which
+     is why that button is styled as the primary one, and the intro
+     paragraph describes the very folder layout drawn in the diagram
+     directly beneath it. Dropping them buys the action row its place in
+     the frame without removing anything the operator cannot see elsewhere. */
+  .upload-guidance { display: none; }
+  .anon-intro-card > .anon-card-head p { display: none; }
+}
+
+/* Safety net. However far the compaction goes, some window will still be
+   too short for the content -- and a control the operator cannot reach is
+   worse than one they have to scroll to. So the tool card itself becomes
+   scrollable rather than letting Approve get clipped off the bottom with
+   no way to get at it. The frame stays viewport-height either way. */
+@media (max-height: 940px) {
+  .anon-layout > .panel-card { overflow-y: auto; }
 }
 
 @media (max-height: 820px) {

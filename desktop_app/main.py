@@ -389,6 +389,12 @@ def main():
         width=1360,
         height=880,
         min_size=(1040, 720),
+        # Open maximized. The workbench is meant to be taken in as one
+        # frame, and on a laptop screen the difference between an 880px
+        # window and the full display is exactly the difference between the
+        # action row being in view and being below the fold. width/height
+        # above remain the size the window restores to when un-maximized.
+        maximized=True,
         background_color="#eaf9f6",
     )
     webview.start(_setup_drag_and_drop, window)

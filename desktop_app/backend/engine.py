@@ -97,26 +97,53 @@ def get_app_data_dir() -> str:
     return path
 
 
-def get_mapping_csv_path(study: str, override: Optional[str] = None) -> str:
+def mapping_csv_name(study: str) -> str:
+    """Same filename the CLI scripts use, so a mapping written by either is
+    picked up by the other without renaming."""
+    return "eGFR_anony_Mapping.csv" if study == "egfr" else "KFRE_anony_Mapping.csv"
+
+
+def get_mapping_csv_path(
+    study: str,
+    override: Optional[str] = None,
+    output_override: Optional[str] = None,
+) -> str:
     """
     Where this run's confidential ID-mapping CSV lives.
 
-    `override` is the operator's explicitly chosen file and wins when given.
-    That matters for more than convenience: the mapping is the ONLY thing
-    that makes a follow-up visit resolve to the patient's existing
-    Anonymized ID, and it is also the list of IDs already issued that a
-    newly minted one is checked against. Running against the wrong file
-    silently issues a second ID for a patient who already has one, so the
-    operator gets to name it rather than having it implied.
+    Resolution order:
 
-    Falls back to the per-user app-data copy, named as the CLI scripts name
-    theirs (eGFR_anony_Mapping.csv / KFRE_anony_Mapping.csv), which is the
-    right default for a single workstation used by one team.
+    1. `override` -- the operator's explicitly chosen file, always wins.
+       This matters for more than convenience: the mapping is the ONLY
+       thing that makes a follow-up visit resolve to the patient's existing
+       Anonymized ID, and it is also the list of IDs already issued that a
+       newly minted one is checked against. Running against the wrong file
+       silently issues a second ID for a patient who already has one.
+
+    2. No CSV chosen but an output destination was -- keep the mapping with
+       the study it belongs to, as a SIBLING of the anonymized folder:
+
+           <chosen>/eGFR_anony_Mapping.csv      <- mapping
+           <chosen>/Anonymized_eGFR/...         <- shareable output
+
+       Deliberately NOT inside Anonymized_*/: that folder is the thing
+       meant to be safe to hand over, and this file carries every real
+       CR No / Lab No. and patient name. anon_common.validate_mapping_csv_
+       location() rejects a mapping path that resolves inside the output
+       directory outright, and a sibling satisfies it.
+
+       Note the boundary this creates: `Anonymized_eGFR/` stays safe to
+       share, but the folder ABOVE it now contains the mapping, so that one
+       must not be zipped up and sent anywhere.
+
+    3. Neither chosen -- the per-user app-data copy, which is the right
+       default for one workstation used by one team.
     """
     if override:
         return os.path.abspath(override)
-    name = "eGFR_anony_Mapping.csv" if study == "egfr" else "KFRE_anony_Mapping.csv"
-    return os.path.join(get_app_data_dir(), name)
+    if output_override:
+        return os.path.join(os.path.abspath(output_override), mapping_csv_name(study))
+    return os.path.join(get_app_data_dir(), mapping_csv_name(study))
 
 
 def get_output_root(study: str, override: Optional[str] = None) -> str:
@@ -355,7 +382,7 @@ def process_egfr_package(
     mapping_csv: Optional[str] = None,
     output_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
-    mapping_csv_path = get_mapping_csv_path("egfr", mapping_csv)
+    mapping_csv_path = get_mapping_csv_path("egfr", mapping_csv, output_dir)
     output_root = get_output_root("egfr", output_dir)
     mapping = ac.MappingStore.load_or_create(mapping_csv_path)
     log: List[str] = []
@@ -418,7 +445,7 @@ def process_kfre_package(
     mapping_csv: Optional[str] = None,
     output_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
-    mapping_csv_path = get_mapping_csv_path("kfre", mapping_csv)
+    mapping_csv_path = get_mapping_csv_path("kfre", mapping_csv, output_dir)
     output_root = get_output_root("kfre", output_dir)
 
     pdf_paths = ac.find_pdfs_recursive(package_dir)
@@ -782,7 +809,7 @@ def process_egfr_batch(
         "study": "egfr",
         "patients": patients,
         "summary": _batch_summary(patients),
-        "mapping_csv_path": get_mapping_csv_path("egfr", mapping_csv),
+        "mapping_csv_path": get_mapping_csv_path("egfr", mapping_csv, output_dir),
         "output_dir": get_output_root("egfr", output_dir),
         "errors": [] if patients else ["No patient subfolders were found in the selected folder."],
     }
@@ -800,7 +827,7 @@ def process_kfre_batch(
     layout -- see anonymize_KFRE.find_input_pdfs()'s own note). So the whole
     selection is processed in one pass and reported one row per group.
     """
-    mapping_csv_path = get_mapping_csv_path("kfre", mapping_csv)
+    mapping_csv_path = get_mapping_csv_path("kfre", mapping_csv, output_dir)
     output_root = get_output_root("kfre", output_dir)
 
     pdf_paths = ac.find_pdfs_recursive(parent_dir)
@@ -947,7 +974,7 @@ def process_package(
         if is_folder:
             if study == "egfr":
                 probe = eg.resolve_patient_identity(package_dir, ac.MappingStore.load_or_create(
-                    get_mapping_csv_path("egfr", mapping_csv)), [])
+                    get_mapping_csv_path("egfr", mapping_csv, output_dir)), [])
                 _kind, values = _distinct_identity_values(probe)
                 if len(values) > 1:
                     result = process_egfr_batch(package_dir, mapping_csv, output_dir)
@@ -998,7 +1025,7 @@ def describe_session(
     which would otherwise show up much later as duplicate IDs for one
     patient.
     """
-    resolved_csv = get_mapping_csv_path(study, mapping_csv)
+    resolved_csv = get_mapping_csv_path(study, mapping_csv, output_dir)
     exists = os.path.exists(resolved_csv)
 
     rows = 0
@@ -1017,6 +1044,7 @@ def describe_session(
         "mapping_csv": resolved_csv,
         "mapping_csv_exists": exists,
         "mapping_csv_is_default": not bool(mapping_csv),
+        "mapping_csv_beside_output": bool(not mapping_csv and output_dir),
         "existing_patients": rows,
         "existing_ids": known_ids,
         "continuing": bool(exists and rows),
