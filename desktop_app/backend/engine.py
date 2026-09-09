@@ -377,14 +377,183 @@ def _build_egfr_preview_pairs(rec: "eg.PatientRecord", out_patient_dir: str) -> 
     return pairs
 
 
+# ==========================================================================
+# Repeat submissions (the same files handed over a second time)
+# ==========================================================================
+#
+# Both studies drive this off their preview PAIRS list, which already
+# enumerates every source file the run would process alongside the exact
+# output path it would write -- so the repeat check needs no separate
+# inventory that could drift from what the writers actually do.
+#
+# See anon_common's "Repeat-submission ledger" section for why the test is a
+# content hash and not a report date, and why the ledger lives beside the
+# mapping CSV.
+
+
+def _fingerprint_pairs(pairs: List[Dict[str, str]]) -> List[tuple]:
+    """[(pair, display_name, sha256, size)] for every readable source file.
+
+    A file that cannot be hashed (permissions, a network share that dropped)
+    is returned with digest None and simply takes no part in the repeat
+    decision -- it is then treated as fresh material and processed, which is
+    the safe direction: the cost of being wrong is redundant work, not
+    skipped patient data.
+    """
+    out: List[tuple] = []
+    for pair in pairs:
+        src = pair.get("original")
+        if not src:
+            continue
+        name = os.path.basename(src)
+        try:
+            out.append((pair, name, ac.sha256_file(src), os.path.getsize(src)))
+        except OSError:
+            out.append((pair, name, None, 0))
+    return out
+
+
+def _repeat_report(
+    verdict: "ac.RepeatVerdict",
+    ledger: "ac.ProcessedFileLedger",
+    fingerprints: List[tuple],
+) -> Dict[str, Any]:
+    """The UI-facing shape of a repeat verdict, including a sentence the
+    operator can act on. Kept here rather than in the JS so both the batch
+    table and the single-patient banner read identical wording."""
+    last_seen = ""
+    for _pair, _name, digest, _size in fingerprints:
+        if not digest:
+            continue
+        entry = ledger.lookup(digest) or {}
+        seen = str(entry.get("last_seen", "") or "")
+        if seen > last_seen:
+            last_seen = seen
+    when = f" on {last_seen[:10]}" if last_seen else ""
+
+    if verdict.verdict == "duplicate":
+        message = (
+            f"Already anonymized{when}. These are the same {verdict.total} file(s), byte for "
+            f"byte, and the anonymized output is still in place, so nothing was re-written."
+        )
+    elif verdict.verdict == "recreate":
+        message = (
+            f"Same {verdict.total} file(s) as a previous session{when}, but their anonymized "
+            f"output was not present at this destination, so it has been written again."
+        )
+    elif verdict.verdict == "partial":
+        message = (
+            f"{verdict.already} of {verdict.total} file(s) were already anonymized{when}; "
+            f"the other {verdict.fresh} are new and have been processed."
+        )
+    else:
+        message = ""
+
+    return {
+        "verdict": verdict.verdict,
+        "skipped": verdict.skip,
+        "total": verdict.total,
+        "already": verdict.already,
+        "fresh": verdict.fresh,
+        "last_seen": last_seen,
+        "repeated_names": verdict.repeated_names[:12],
+        "conflicts": verdict.conflicts,
+        "message": message,
+    }
+
+
+def _conflict_warnings(verdict: "ac.RepeatVerdict", anon_id: str) -> List[str]:
+    """Operator-facing text for files previously filed under a DIFFERENT
+    Anonymized ID. Reported as warnings, not errors: the run itself is
+    sound, but the anonymized dataset now holds one source document under
+    two subject IDs, and only the operator can say which mapping is right."""
+    if not verdict.conflicts:
+        return []
+    previous = sorted({c["previous_id"] for c in verdict.conflicts})
+    names = ", ".join(c["name"] for c in verdict.conflicts[:6])
+    more = ", ..." if len(verdict.conflicts) > 6 else ""
+    return [
+        f"{len(verdict.conflicts)} file(s) in this package were already anonymized under a "
+        f"different Anonymized ID ({', '.join(previous)}), but resolve to {anon_id} now. That "
+        f"usually means a different mapping CSV was selected than the one used last time. The "
+        f"same patient may now appear twice in the anonymized dataset under two IDs -- check "
+        f"which mapping file is the right one before sharing. Files: {names}{more}"
+    ]
+
+
+def _check_repeat(
+    pairs: List[Dict[str, str]],
+    anon_id: str,
+    ledger: "ac.ProcessedFileLedger",
+) -> tuple:
+    """(RepeatVerdict, fingerprints). Outputs are judged present only when
+    EVERY expected output exists at the destination this run would write
+    to, so pointing at a fresh output folder correctly re-writes everything
+    instead of reporting it as already done."""
+    fingerprints = _fingerprint_pairs(pairs)
+    outputs_exist = bool(pairs) and all(
+        p.get("output") and os.path.exists(p["output"]) for p in pairs
+    )
+    verdict = ac.classify_repeat(
+        [(name, digest, size) for _pair, name, digest, size in fingerprints if digest],
+        anon_id,
+        ledger,
+        outputs_exist,
+    )
+    return verdict, fingerprints
+
+
+def _record_written(
+    ledger: "ac.ProcessedFileLedger",
+    fingerprints: List[tuple],
+    written: List[Dict[str, str]],
+    anon_id: str,
+    study: str,
+    output_root: str,
+) -> None:
+    """Record only the files whose output this run actually wrote. A file
+    that failed redaction must stay unrecorded, or the next session would
+    call it "already anonymized" and skip the retry."""
+    written_srcs = {p.get("original") for p in written}
+    for pair, name, digest, size in fingerprints:
+        if not digest or pair.get("original") not in written_srcs:
+            continue
+        output = pair.get("output") or ""
+        try:
+            output_rel = os.path.relpath(output, output_root) if output else None
+        except ValueError:  # different drive -- store nothing rather than an absolute path
+            output_rel = None
+        ledger.record(
+            digest,
+            anon_id=anon_id,
+            study=study,
+            name=name,
+            size=size,
+            output_rel=output_rel,
+        )
+
+
+def _touch_all(ledger: "ac.ProcessedFileLedger", fingerprints: List[tuple]) -> None:
+    for _pair, _name, digest, _size in fingerprints:
+        if digest:
+            ledger.touch(digest)
+
+
 def process_egfr_package(
     package_dir: str,
     mapping_csv: Optional[str] = None,
     output_dir: Optional[str] = None,
+    ledger: Optional["ac.ProcessedFileLedger"] = None,
 ) -> Dict[str, Any]:
     mapping_csv_path = get_mapping_csv_path("egfr", mapping_csv, output_dir)
     output_root = get_output_root("egfr", output_dir)
     mapping = ac.MappingStore.load_or_create(mapping_csv_path)
+    # A batch hands its own ledger down so the JSON is read and written once
+    # for the whole run rather than once per patient; a single-package run
+    # owns it here.
+    owns_ledger = ledger is None
+    if owns_ledger:
+        ledger = ac.ProcessedFileLedger.load_or_create(ac.ledger_path_for_mapping_csv(mapping_csv_path))
     log: List[str] = []
 
     rec = eg.resolve_patient_identity(package_dir, mapping, log)
@@ -409,6 +578,42 @@ def process_egfr_package(
             "log": log,
         }
 
+    out_patient_dir = os.path.join(output_root, rec.anon_id)
+    pairs = _build_egfr_preview_pairs(rec, out_patient_dir)
+
+    # The mapping store has just told us this is a KNOWN patient (a reused
+    # ID). That alone does not say whether this is a follow-up visit or the
+    # same visit handed over twice -- only the file bytes do.
+    repeat, fingerprints = _check_repeat(pairs, rec.anon_id, ledger)
+    # Built now, before anything is recorded: _record_written() stamps these
+    # same entries with today's date, which would otherwise turn "already
+    # anonymized on 12 Aug" into "already anonymized on today".
+    repeat_report = _repeat_report(repeat, ledger, fingerprints)
+    warnings = _conflict_warnings(repeat, rec.anon_id)
+
+    if repeat.skip:
+        _touch_all(ledger, fingerprints)
+        mapping.save()
+        if owns_ledger:
+            ledger.save()
+        existing = _only_written_pairs(pairs)  # no mtime gate: these ARE the earlier run's output
+        return {
+            "success": True,
+            "study": "egfr",
+            "anon_id": rec.anon_id,
+            "is_new_id": False,
+            "identity_kind": rec.identity_kind,
+            "output_dir": out_patient_dir,
+            "mapping_csv_path": mapping_csv_path,
+            "dcm_count": sum(1 for p in existing if p.get("original", "").lower().endswith(".dcm")),
+            "failed_pdfs": [],
+            "errors": [],
+            "warnings": warnings,
+            "repeat": repeat_report,
+            "preview_pairs": existing,
+            "log": log,
+        }
+
     # Captured before the writers run so the preview can tell this run's
     # output apart from a previous run's leftovers at the same paths (this
     # patient's folder persists across runs) -- see _only_written_pairs().
@@ -416,7 +621,11 @@ def process_egfr_package(
     eg.write_patient_outputs(rec, output_root)
     mapping.save()
 
-    out_patient_dir = os.path.join(output_root, rec.anon_id)
+    written = _only_written_pairs(pairs, write_started)
+    _record_written(ledger, fingerprints, written, rec.anon_id, "egfr", output_root)
+    if owns_ledger:
+        ledger.save()
+
     return {
         "success": not rec.errors and not rec.failed_pdfs,
         "study": "egfr",
@@ -428,9 +637,9 @@ def process_egfr_package(
         "dcm_count": rec.dcm_count,
         "failed_pdfs": [{"path": p, "reason": r} for p, r in rec.failed_pdfs],
         "errors": rec.errors,
-        "preview_pairs": _only_written_pairs(
-            _build_egfr_preview_pairs(rec, out_patient_dir), write_started
-        ),
+        "warnings": warnings,
+        "repeat": repeat_report,
+        "preview_pairs": written,
         "log": log,
     }
 
@@ -440,10 +649,28 @@ def process_egfr_package(
 # ==========================================================================
 
 
+def _copy_scanned(scanned: List[Any], output_root: str) -> List[Dict[str, str]]:
+    """Pass through the scanned/no-extractable-PII files. They carry no
+    identity key, so they belong to no patient group and take no part in the
+    repeat decision -- they are plain byte copies whether or not this is a
+    repeat submission, and copying one again costs a file copy."""
+    pairs: List[Dict[str, str]] = []
+    for rec in scanned:
+        dst = os.path.join(output_root, rec.filename)
+        ac.safe_copy_bytes(rec.src_path, dst)
+        pairs.append({
+            "original": rec.src_path,
+            "output": dst,
+            "category": "Scanned, no extractable PII -- copied unchanged",
+        })
+    return pairs
+
+
 def process_kfre_package(
     package_dir: str,
     mapping_csv: Optional[str] = None,
     output_dir: Optional[str] = None,
+    ledger: Optional["ac.ProcessedFileLedger"] = None,
 ) -> Dict[str, Any]:
     mapping_csv_path = get_mapping_csv_path("kfre", mapping_csv, output_dir)
     output_root = get_output_root("kfre", output_dir)
@@ -480,28 +707,57 @@ def process_kfre_package(
         }
 
     mapping = ac.MappingStore.load_or_create(mapping_csv_path)
+    owns_ledger = ledger is None
+    if owns_ledger:
+        ledger = ac.ProcessedFileLedger.load_or_create(ac.ledger_path_for_mapping_csv(mapping_csv_path))
     group = groups[0]
     anon_id, is_new = mapping.get_or_assign(original_key=group.identity_key, name=group.patient_name)
 
     os.makedirs(output_root, exist_ok=True)
+
+    report_pairs: List[Dict[str, str]] = [{
+        "original": rec.src_path,
+        "output": os.path.join(output_root, f"{anon_id}_{rec.filename}"),
+        "category": "Clinical / lab report",
+    } for rec in group.files]
+
+    # A reused Anonymized ID means a known patient, not necessarily a new
+    # visit -- only the file bytes separate a follow-up from the same
+    # reports being handed over twice.
+    repeat, fingerprints = _check_repeat(report_pairs, anon_id, ledger)
+    repeat_report = _repeat_report(repeat, ledger, fingerprints)  # before _record_written restamps the dates
+    warnings = _conflict_warnings(repeat, anon_id)
+
+    if repeat.skip:
+        scanned_pairs = _copy_scanned(scanned, output_root)
+        _touch_all(ledger, fingerprints)
+        mapping.save()
+        if owns_ledger:
+            ledger.save()
+        return {
+            "success": not errors,
+            "study": "kfre",
+            "anon_id": anon_id,
+            "is_new_id": False,
+            "identity_kind": group.identity_key_kind,
+            "output_dir": output_root,
+            "mapping_csv_path": mapping_csv_path,
+            "errors": errors,
+            "warnings": warnings,
+            "repeat": repeat_report,
+            # No mtime gate: these ARE the earlier run's output, deliberately
+            # left untouched, and the operator can still cross-check them.
+            "preview_pairs": _only_written_pairs(report_pairs) + scanned_pairs,
+        }
+
     write_started = time.time()  # see _only_written_pairs()
     exit_code = kf._run_redaction_and_save([group], mapping, output_root)  # also calls mapping.save()
 
-    pairs: List[Dict[str, str]] = []
-    for rec in group.files:
-        pairs.append({
-            "original": rec.src_path,
-            "output": os.path.join(output_root, f"{anon_id}_{rec.filename}"),
-            "category": "Clinical / lab report",
-        })
-    for rec in scanned:
-        dst = os.path.join(output_root, rec.filename)
-        ac.safe_copy_bytes(rec.src_path, dst)
-        pairs.append({
-            "original": rec.src_path,
-            "output": dst,
-            "category": "Scanned, no extractable PII -- copied unchanged",
-        })
+    scanned_pairs = _copy_scanned(scanned, output_root)
+    written = _only_written_pairs(report_pairs + scanned_pairs, write_started)
+    _record_written(ledger, fingerprints, written, anon_id, "kfre", output_root)
+    if owns_ledger:
+        ledger.save()
 
     return {
         "success": exit_code == 0 and not errors,
@@ -512,7 +768,9 @@ def process_kfre_package(
         "output_dir": output_root,
         "mapping_csv_path": mapping_csv_path,
         "errors": errors,
-        "preview_pairs": _only_written_pairs(pairs, write_started),
+        "warnings": warnings,
+        "repeat": repeat_report,
+        "preview_pairs": written,
     }
 
 
@@ -770,12 +1028,21 @@ def _patient_subfolders(parent_dir: str) -> List[str]:
 
 
 def _batch_summary(patients: List[Dict[str, Any]]) -> Dict[str, int]:
+    def repeat_is(p: Dict[str, Any], *verdicts: str) -> bool:
+        return (p.get("repeat") or {}).get("verdict") in verdicts
+
     return {
         "total": len(patients),
         "succeeded": sum(1 for p in patients if p.get("success")),
         "failed": sum(1 for p in patients if not p.get("success")),
         "new_ids": sum(1 for p in patients if p.get("is_new_id")),
         "reused_ids": sum(1 for p in patients if p.get("anon_id") and not p.get("is_new_id")),
+        # Repeat submissions, split by what was actually done about them, so
+        # "10 of 10 succeeded" can never quietly mean "and 7 of those were
+        # the same files you gave me last week".
+        "skipped_duplicates": sum(1 for p in patients if repeat_is(p, "duplicate")),
+        "partial_repeats": sum(1 for p in patients if repeat_is(p, "partial", "recreate")),
+        "conflicts": sum(len((p.get("repeat") or {}).get("conflicts") or []) for p in patients),
     }
 
 
@@ -793,15 +1060,25 @@ def process_egfr_batch(
     boundaries. One patient failing does not abort the others; its errors
     are reported in its own row.
     """
+    mapping_csv_path = get_mapping_csv_path("egfr", mapping_csv, output_dir)
+    # One ledger for the whole batch: read once, written once. Per-patient
+    # loading would re-read and re-write the same JSON for every folder.
+    ledger = ac.ProcessedFileLedger.load_or_create(ac.ledger_path_for_mapping_csv(mapping_csv_path))
+
     patients: List[Dict[str, Any]] = []
     for sub in _patient_subfolders(parent_dir):
         try:
-            result = process_egfr_package(sub, mapping_csv, output_dir)
+            result = process_egfr_package(sub, mapping_csv, output_dir, ledger=ledger)
         except Exception as exc:  # noqa: BLE001 -- one bad folder must not kill the run
             result = {"success": False, "study": "egfr", "errors": [f"Unexpected error: {exc}"]}
         result["source"] = os.path.basename(sub.rstrip(os.sep))
         result["source_path"] = sub
         patients.append(result)
+
+    # Saved even when some folders failed: every patient that DID get written
+    # must be on record, or the next session offers to redo work it already
+    # did. Failed files are never recorded (see _record_written).
+    ledger.save()
 
     return {
         "success": bool(patients) and all(p.get("success") for p in patients),
@@ -870,35 +1147,62 @@ def process_kfre_batch(
         }
 
     mapping = ac.MappingStore.load_or_create(mapping_csv_path)
+    ledger = ac.ProcessedFileLedger.load_or_create(ac.ledger_path_for_mapping_csv(mapping_csv_path))
     assigned = []
     for group in groups:
         anon_id, is_new = mapping.get_or_assign(original_key=group.identity_key, name=group.patient_name)
         assigned.append((group, anon_id, is_new))
 
     os.makedirs(output_root, exist_ok=True)
-    write_started = time.time()  # see _only_written_pairs()
-    exit_code = kf._run_redaction_and_save(groups, mapping, output_root)  # also calls mapping.save()
 
-    # Scanned/no-PII files carry no identity, so they cannot be attributed to
-    # a patient -- copied once, reported at batch level (same as the CLI).
-    scanned_pairs = []
-    for rec in scanned:
-        dst = os.path.join(output_root, rec.filename)
-        ac.safe_copy_bytes(rec.src_path, dst)
-        scanned_pairs.append({
-            "original": rec.src_path,
-            "output": dst,
-            "category": "Scanned, no extractable PII -- copied unchanged",
-        })
-
-    patients: List[Dict[str, Any]] = []
+    # Every patient's repeat verdict is decided BEFORE anything is written,
+    # so the groups that are pure repeats can be kept out of the redaction
+    # pass entirely rather than redone and overwritten.
+    prepared = []
+    to_write = []
     for group, anon_id, is_new in assigned:
         pairs = [{
             "original": rec.src_path,
             "output": os.path.join(output_root, f"{anon_id}_{rec.filename}"),
             "category": "Clinical / lab report",
         } for rec in group.files]
+        repeat, fingerprints = _check_repeat(pairs, anon_id, ledger)
+        prepared.append((group, anon_id, is_new, pairs, repeat, _repeat_report(repeat, ledger, fingerprints), fingerprints))
+        if not repeat.skip:
+            to_write.append(group)
+
+    write_started = time.time()  # see _only_written_pairs()
+    exit_code = kf._run_redaction_and_save(to_write, mapping, output_root) if to_write else 0
+    mapping.save()  # _run_redaction_and_save() does this itself, but not when every group was skipped
+
+    # Scanned/no-PII files carry no identity, so they cannot be attributed to
+    # a patient -- copied once, reported at batch level (same as the CLI).
+    scanned_pairs = _copy_scanned(scanned, output_root)
+
+    patients: List[Dict[str, Any]] = []
+    for group, anon_id, is_new, pairs, repeat, repeat_report, fingerprints in prepared:
+        if repeat.skip:
+            _touch_all(ledger, fingerprints)
+            patients.append({
+                "success": True,
+                "study": "kfre",
+                "source": f"{group.identity_key_kind} {group.identity_key}",
+                "source_path": os.path.dirname(group.files[0].src_path) if group.files else parent_dir,
+                "anon_id": anon_id,
+                "is_new_id": False,
+                "identity_kind": group.identity_key_kind,
+                "output_dir": output_root,
+                "mapping_csv_path": mapping_csv_path,
+                "errors": [],
+                "warnings": _conflict_warnings(repeat, anon_id),
+                "repeat": repeat_report,
+                "failed_pdfs": [],
+                "preview_pairs": _only_written_pairs(pairs),  # the earlier run's output, left as it is
+            })
+            continue
+
         written = _only_written_pairs(pairs, write_started)
+        _record_written(ledger, fingerprints, written, anon_id, "kfre", output_root)
         patients.append({
             "success": exit_code == 0 and len(written) == len(pairs),
             "study": "kfre",
@@ -912,9 +1216,13 @@ def process_kfre_batch(
             "errors": [] if len(written) == len(pairs) else [
                 f"{len(pairs) - len(written)} of {len(pairs)} report(s) were not written for this patient."
             ],
+            "warnings": _conflict_warnings(repeat, anon_id),
+            "repeat": repeat_report,
             "failed_pdfs": [],
             "preview_pairs": written,
         })
+
+    ledger.save()
 
     return {
         "success": exit_code == 0 and not batch_errors and all(p["success"] for p in patients),
@@ -1028,6 +1336,14 @@ def describe_session(
     resolved_csv = get_mapping_csv_path(study, mapping_csv, output_dir)
     exists = os.path.exists(resolved_csv)
 
+    # The repeat-submission ledger that travels with this mapping CSV. Its
+    # size is worth reporting for the same reason the row count is: it tells
+    # the operator up front whether re-submitted files will be recognised in
+    # this session, or whether they have pointed at a mapping whose ledger
+    # has not been carried over.
+    ledger_path = ac.ledger_path_for_mapping_csv(resolved_csv)
+    processed_files = len(ac.ProcessedFileLedger.load_or_create(ledger_path).entries)
+
     rows = 0
     known_ids = 0
     error = None
@@ -1048,6 +1364,8 @@ def describe_session(
         "existing_patients": rows,
         "existing_ids": known_ids,
         "continuing": bool(exists and rows),
+        "ledger_path": ledger_path,
+        "processed_files": processed_files,
         "output_dir": get_output_root(study, output_dir),
         "output_is_default": not bool(output_dir),
         "error": error,

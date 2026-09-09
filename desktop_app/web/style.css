@@ -1020,6 +1020,12 @@ body.ready .scroll-cue { opacity: 1; }
 .batch-row-errors td { padding-top: 0; background: #fffbeb; border-bottom: 1px solid #f1f5f9; }
 .batch-row-errors ul { margin: 0 0 0.5rem; padding-left: 1.2rem; color: #92400e; font-size: 0.84rem; line-height: 1.6; }
 
+/* Notes on a row that SUCCEEDED -- why nothing was rewritten, which files
+   were repeats. Deliberately not styled as a problem. */
+.batch-row-duplicate td { background: #f8fafc; }
+.batch-row-note td { padding-top: 0; background: #f8fafc; border-bottom: 1px solid #f1f5f9; }
+.batch-row-note ul { margin: 0 0 0.5rem; padding-left: 1.2rem; color: #475569; font-size: 0.84rem; line-height: 1.6; }
+
 .batch-status {
   display: inline-block;
   padding: 0.25rem 0.7rem;
@@ -1030,6 +1036,10 @@ body.ready .scroll-cue { opacity: 1; }
 .batch-status.ok   { background: #ecfdf5; color: #065f46; border: 1px solid rgba(14, 159, 110, 0.35); }
 .batch-status.warn { background: #fffbeb; color: #92400e; border: 1px solid rgba(217, 119, 6, 0.35); }
 .batch-status.fail { background: var(--danger-bg); color: #991b1b; border: 1px solid rgba(220, 38, 38, 0.3); }
+/* "Already done" is a good outcome, not a problem -- slate rather than the
+   amber of a warning, so a screen full of repeats does not read as alarming,
+   but distinct from the green of work performed just now. */
+.batch-status.dup  { background: #f1f5f9; color: #334155; border: 1px solid rgba(100, 116, 139, 0.35); }
 
 .batch-row-actions { text-align: right; white-space: nowrap; }
 

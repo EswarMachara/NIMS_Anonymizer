@@ -55,3 +55,10 @@ Thumbs.db
 Anonymized_eGFR/
 Anonymized_KFRE/
 *_anony_Mapping.csv
+# The repeat-submission ledger that travels with the mapping CSV. Records the
+# ORIGINAL filename of every file already anonymized, which in a hospital's
+# own naming can carry patient names -- same confidentiality class as the CSV.
+*_processed_files.json
+
+# Transient artifact of desktop_app/build/ui_preview.py
+desktop_app/web/_ui_preview.html

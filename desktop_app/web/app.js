@@ -148,9 +148,18 @@ function renderSession(info) {
   if (info.continuing) {
     els.csvState.textContent = "Continuing";
     els.csvState.className = "session-state is-good";
+    // The file count is the repeat check: a known patient could be a
+    // follow-up OR the same documents again, and only that record tells
+    // them apart. Say so when it is missing too -- a mapping CSV carried
+    // over WITHOUT its companion file looks completely normal otherwise,
+    // and the first sign of trouble would be already-done patients being
+    // quietly redone.
+    const known = info.processed_files
+      ? ` ${info.processed_files} file(s) already anonymized are on record, so the same documents handed in again are recognised instead of redone.`
+      : " No record of previously anonymized files sits next to this CSV, so re-submitted documents cannot be recognised. Copy the matching _processed_files.json file alongside it if you have one.";
     els.csvHint.textContent =
       `${info.existing_patients} patient(s) already in this mapping. A returning patient keeps their existing ` +
-      `Anonymized ID, and any new ID is checked against all ${info.existing_ids} already issued.`;
+      `Anonymized ID, and any new ID is checked against all ${info.existing_ids} already issued.` + known;
   } else {
     els.csvState.textContent = csvChosen ? "Empty file" : "New mapping";
     els.csvState.className = `session-state ${csvChosen ? "is-warn" : ""}`;
@@ -333,13 +342,24 @@ function renderResult(result) {
 
   els.resultBanner.classList.remove("hidden");
   if (result.success) {
-    els.statusCard.textContent = `${result.preview_pairs?.length || 0} file(s) anonymized.`;
+    const repeat = result.repeat || {};
+    const isDuplicate = repeat.verdict === "duplicate";
+    els.statusCard.textContent = isDuplicate
+      ? `${result.preview_pairs?.length || 0} file(s) already anonymized earlier.`
+      : `${result.preview_pairs?.length || 0} file(s) anonymized.`;
     els.statusCard.classList.add("has-file");
-    els.resultBanner.className = "result-banner success";
+    els.resultBanner.className = `result-banner ${isDuplicate ? "warn" : "success"}`;
+    // A reused ID means a known patient, which is not the same as a new
+    // visit. Say which one this actually is rather than assuming follow-up.
+    const idNote = result.is_new_id
+      ? " (new patient)"
+      : " (already-known patient, existing ID reused)";
+    const notes = (result.warnings || []).map((w) => `<li>${escapeHTML(w)}</li>`).join("");
     els.resultBanner.innerHTML = `
-      <strong>Anonymization complete (${studyLabel})</strong>
-      Anonymized ID: <span class="anon-id-pill">${escapeHTML(result.anon_id)}</span>
-      ${result.is_new_id ? " (new patient)" : " (existing patient, ID reused for this follow-up visit)"}
+      <strong>${isDuplicate ? "Nothing to do (" + studyLabel + ")" : "Anonymization complete (" + studyLabel + ")"}</strong>
+      Anonymized ID: <span class="anon-id-pill">${escapeHTML(result.anon_id)}</span>${idNote}
+      ${repeat.message ? `<br>${escapeHTML(repeat.message)}` : ""}
+      ${notes ? `<ul>${notes}</ul>` : ""}
     `;
     els.revealBtn.disabled = false;
     els.approveBtn.disabled = false;
@@ -414,34 +434,65 @@ function renderBatchResult(result, studyLabel) {
 
   els.resultBanner.classList.remove("hidden");
   els.resultBanner.className = `result-banner ${result.success ? "success" : s.succeeded ? "warn" : "error"}`;
-  const batchErrs = (result.errors || []).map((e) => `<li>${escapeHTML(e)}</li>`).join("");
+  const batchNotes = (result.errors || []).map((e) => `<li>${escapeHTML(e)}</li>`).join("") +
+    (result.patients || [])
+      .flatMap((p) => p.warnings || [])
+      .map((w) => `<li>${escapeHTML(w)}</li>`)
+      .join("");
+
+  // A reused ID alone does not distinguish a follow-up visit from the same
+  // documents being handed in twice, so the two are counted separately --
+  // otherwise "10 of 10 succeeded" quietly covers "and 7 of those were
+  // files you already gave me".
+  // Plain text, no <strong>: .result-banner strong is display:block, so a
+  // second one here would break this sentence across two lines mid-clause.
+  const dup = s.skipped_duplicates || 0;
+  const repeats = dup
+    ? ` ${dup} of them were the same files as before and were left exactly as they are.`
+    : "";
+  const partial = s.partial_repeats
+    ? ` ${s.partial_repeats} had some files already done and some new.`
+    : "";
   els.resultBanner.innerHTML = `
     <strong>Batch anonymization (${studyLabel}): ${escapeHTML(String(s.succeeded || 0))} of
       ${escapeHTML(String(s.total || 0))} patient(s) succeeded</strong>
-    ${s.new_ids || 0} new ID(s), ${s.reused_ids || 0} reused (follow-up visits).
-    ${batchErrs ? `<ul>${batchErrs}</ul>` : ""}
+    ${s.new_ids || 0} new ID(s), ${s.reused_ids || 0} reused (already-known patients).${repeats}${partial}
+    ${batchNotes ? `<ul>${batchNotes}</ul>` : ""}
   `;
 
   els.batchSummary.textContent =
     `Each patient folder was resolved independently and given its own Anonymized ID, ` +
-    `so no two patients can share one ID. Review any patient with "Cross-check".`;
+    `so no two patients can share one ID. Files already anonymized in an earlier session are ` +
+    `recognised by their content and left untouched. Review any patient with "Cross-check".`;
 
   els.batchTbody.innerHTML = "";
   patients.forEach((p, index) => {
     const fileCount = (p.preview_pairs || []).length;
-    const statusLabel = p.success
-      ? "Anonymized"
-      : (p.anon_id ? "Partly written" : "Not processed");
-    const statusClass = p.success ? "ok" : (p.anon_id ? "warn" : "fail");
+    const repeat = p.repeat || {};
+    // `&& p.success` is belt and braces: the engine only ever returns a
+    // skipped duplicate as a success, and a row that failed must never be
+    // labelled "Already done" whatever else it carries.
+    const isDuplicate = repeat.verdict === "duplicate" && p.success;
+    // "Already done" is a success, but it must never read as "Anonymized"
+    // just now -- that is the whole confusion this check exists to remove.
+    const statusLabel = isDuplicate
+      ? "Already done"
+      : p.success
+        ? (repeat.verdict === "partial" ? "Anonymized (+repeats)" : "Anonymized")
+        : (p.anon_id ? "Partly written" : "Not processed");
+    const statusClass = isDuplicate ? "dup" : p.success ? "ok" : (p.anon_id ? "warn" : "fail");
     const canReview = fileCount > 0;
+    const idNote = p.anon_id ? (p.is_new_id ? "new" : "already known") : "";
 
     const tr = document.createElement("tr");
-    tr.className = p.success ? "" : "batch-row-problem";
+    tr.className = p.success ? (isDuplicate ? "batch-row-duplicate" : "") : "batch-row-problem";
     tr.innerHTML = `
       <td><strong>${escapeHTML(p.source || "(unnamed)")}</strong></td>
       <td>${p.anon_id ? `<span class="anon-id-pill">${escapeHTML(p.anon_id)}</span>
-            <small>${p.is_new_id ? "new" : "reused"}</small>` : "<small>none assigned</small>"}</td>
-      <td>${fileCount}${p.dcm_count != null ? `<small>${escapeHTML(String(p.dcm_count))} image(s)</small>` : ""}</td>
+            <small>${escapeHTML(idNote)}</small>` : "<small>none assigned</small>"}</td>
+      <td>${fileCount}${isDuplicate
+            ? "<small>unchanged</small>"
+            : (p.dcm_count != null ? `<small>${escapeHTML(String(p.dcm_count))} image(s)</small>` : "")}</td>
       <td><span class="batch-status ${statusClass}">${escapeHTML(statusLabel)}</span></td>
       <td class="batch-row-actions"></td>
     `;
@@ -457,14 +508,20 @@ function renderBatchResult(result, studyLabel) {
 
     els.batchTbody.appendChild(tr);
 
-    if (!p.success && (p.errors || []).length) {
-      const errTr = document.createElement("tr");
-      errTr.className = "batch-row-errors";
+    // One extra row carries whatever this patient still needs explained:
+    // why nothing was rewritten, which files were repeats, or an ID clash.
+    const notes = [];
+    if (repeat.message) notes.push(escapeHTML(repeat.message));
+    (p.warnings || []).forEach((w) => notes.push(escapeHTML(w)));
+    if (!p.success) (p.errors || []).forEach((e) => notes.push(escapeHTML(e)));
+    if (notes.length) {
+      const noteTr = document.createElement("tr");
+      noteTr.className = p.success ? "batch-row-note" : "batch-row-errors";
       const td = document.createElement("td");
       td.colSpan = 5;
-      td.innerHTML = `<ul>${p.errors.map((e) => `<li>${escapeHTML(e)}</li>`).join("")}</ul>`;
-      errTr.appendChild(td);
-      els.batchTbody.appendChild(errTr);
+      td.innerHTML = `<ul>${notes.map((n) => `<li>${n}</li>`).join("")}</ul>`;
+      noteTr.appendChild(td);
+      els.batchTbody.appendChild(noteTr);
     }
   });
 

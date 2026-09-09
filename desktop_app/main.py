@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import traceback
 
 import webview
@@ -118,6 +119,14 @@ class Api:
         wrong one, or forgetting it, means a follow-up visit silently
         becomes a second patient. Hence a dedicated picker rather than an
         implied default the operator never sees.
+
+        A companion file sits next to it -- <same name>_processed_files.json,
+        the record of which files have already been anonymized (see
+        anon_common.ledger_path_for_mapping_csv). Only the CSV is picked
+        here, because the companion is found from the CSV's own path; but
+        the two must be COPIED together when a mapping is moved between
+        machines, or repeat submissions stop being recognised. The session
+        panel says so when the companion is missing.
         """
         window = webview.windows[0]
         result = window.create_file_dialog(
@@ -362,6 +371,42 @@ def self_test() -> int:
             print(f"{module}: OK")
         except Exception as exc:  # noqa: BLE001
             problems.append(f"{module} is not importable in this build: {exc}")
+
+    # Repeat detection, exercised end to end on a throwaway file rather than
+    # merely imported: a broken ledger here would not crash anything, it
+    # would quietly re-anonymize work already done, which is precisely the
+    # class of failure nobody notices until the output folder is wrong.
+    try:
+        import anon_common as _ac
+
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = os.path.join(tmp, "probe.bin")
+            with open(probe, "wb") as f:
+                f.write(b"repeat-detection self-test")
+            digest = _ac.sha256_file(probe)
+
+            ledger = _ac.ProcessedFileLedger.load_or_create(
+                _ac.ledger_path_for_mapping_csv(os.path.join(tmp, "probe_Mapping.csv"))
+            )
+            fresh = _ac.classify_repeat([("probe.bin", digest, 26)], "TEST1234", ledger, True)
+            ledger.record(digest, anon_id="TEST1234", study="egfr", name="probe.bin", size=26)
+            ledger.save()
+
+            reloaded = _ac.ProcessedFileLedger.load_or_create(ledger.path)
+            same = _ac.classify_repeat([("probe.bin", digest, 26)], "TEST1234", reloaded, True)
+            other = _ac.classify_repeat([("probe.bin", digest, 26)], "OTHER999", reloaded, True)
+
+        if fresh.verdict != "new":
+            problems.append(f"an unseen file was not treated as new (got {fresh.verdict!r})")
+        if not same.skip:
+            problems.append(f"a repeat submission was not recognised (got {same.verdict!r})")
+        if not other.conflicts:
+            problems.append("a file re-filed under a different Anonymized ID was not flagged")
+        print(f"repeat detection: OK (new -> {fresh.verdict}, repeat -> {same.verdict}, "
+              f"{len(other.conflicts)} conflict(s) caught)")
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"repeat detection is broken in this build: {exc}")
+        traceback.print_exc()
 
     if problems:
         print("\nSELF-TEST FAILED:")

@@ -34,10 +34,13 @@ storage) at all times.
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import os
 import random
 import re
 import string
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -286,6 +289,278 @@ def validate_mapping_csv_location(
                 f"at a separate, access-restricted location."
             )
     return None
+
+
+# ==========================================================================
+# 1b. Repeat-submission ledger -- "have I already anonymized these exact
+#     files before?"
+# ==========================================================================
+#
+# The mapping CSV answers "have I seen this PATIENT before?" and, when the
+# answer is yes, reuses their Anonymized ID. That is exactly right for a
+# follow-up visit -- and exactly wrong for the other thing that produces the
+# same answer: a folder that was already anonymized in an earlier session
+# being handed over again. Both look identical to the mapping store (a known
+# CR No / Lab No.), so both get reported as a follow-up, and the second one
+# silently redoes the work and overwrites already-verified output.
+#
+# WHY A CONTENT HASH RATHER THAN A DATE
+# -------------------------------------
+# A report/study date is the intuitive discriminator, but it cannot decide
+# this question and is not free to obtain:
+#
+#   * It does not discriminate. Every report from one visit carries that
+#     visit's date, and a repeat test genuinely ordered on the same day
+#     carries it too. "Same date" therefore means "same day", not "same
+#     document" -- it would flag real new material as a repeat, which is
+#     the dangerous direction to be wrong in (data silently not processed).
+#   * It is not extracted anywhere today. Neither TemplateAFields nor
+#     TemplateBFields carries a date; both templates were validated field
+#     by field for the PII they redact. Adding date parsing means new,
+#     layout-dependent extraction against those same templates, and KFRE is
+#     PDF-only so it has no DICOM header to fall back on.
+#
+# A SHA-256 over the file bytes has neither problem. It is exact (identical
+# bytes and nothing else), it is study-agnostic (one code path for DICOM and
+# PDF, eGFR and KFRE), and it needs no knowledge of either template. It is
+# also cheap next to the work it lets us skip: hashing a patient's files
+# costs tens of milliseconds, while re-running them costs seconds -- DICOM
+# decoding alone is ~89% of per-patient time (see
+# anonymize_eGFR.write_patient_outputs).
+#
+# It errs in the safe direction: a fresh export of the same visit from the
+# PACS would carry different bytes and be treated as new material, i.e.
+# exactly the behaviour that exists today. It never claims "already done"
+# about anything it has not verified byte for byte.
+#
+# WHERE THE LEDGER LIVES
+# ----------------------
+# Beside the mapping CSV, named after it. That is not filing convenience:
+#
+#   * It has to travel with the mapping CSV. The two are one session
+#     memory -- carrying the CSV to the next session without the ledger
+#     would resurrect the exact confusion this exists to remove.
+#   * It is confidential material of the same class. It stores original
+#     FILENAMES, which in a hospital's own naming can carry patient names.
+#     Deriving its path from the mapping CSV's puts it inside the same
+#     protection domain, and inherits validate_mapping_csv_location()'s
+#     guarantee that it can never land inside the shareable output folder.
+
+LEDGER_VERSION = 1
+LEDGER_SUFFIX = "_processed_files.json"
+
+LEDGER_NOTICE = (
+    "Keep this file with the mapping CSV and under the same access "
+    "restrictions: it records the original filenames of every file already "
+    "anonymized. It must NEVER be copied into the anonymized output folder."
+)
+
+
+def ledger_path_for_mapping_csv(mapping_csv_path: str) -> str:
+    """The repeat-submission ledger belonging to this mapping CSV -- e.g.
+    ``KFRE_anony_Mapping.csv`` -> ``KFRE_anony_Mapping_processed_files.json``.
+    Derived rather than separately configured so the two cannot be parted by
+    accident; see the section note above for why that matters."""
+    stem, _ext = os.path.splitext(os.path.abspath(mapping_csv_path))
+    return stem + LEDGER_SUFFIX
+
+
+def _utc_stamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def sha256_file(path: str, chunk_bytes: int = 1 << 20) -> str:
+    """SHA-256 over a file's bytes, read in chunks so a 40 MB ultrasound
+    series never lands in memory whole."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(chunk_bytes), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+@dataclass
+class ProcessedFileLedger:
+    """
+    Content hash -> which Anonymized ID it was filed under, and what was
+    written for it. Loaded once per run, queried per patient, saved once.
+
+    Deliberately keyed by hash ALONE rather than by (patient, hash): that is
+    what lets it notice a file previously filed under a DIFFERENT Anonymized
+    ID, which is an integrity problem to report rather than a duplicate to
+    skip -- see classify_repeat().
+    """
+
+    path: str
+    entries: Dict[str, Dict] = field(default_factory=dict)
+    _loaded_from_disk: bool = False
+
+    @classmethod
+    def load_or_create(cls, path: str) -> "ProcessedFileLedger":
+        ledger = cls(path=os.path.abspath(path))
+        if not os.path.exists(ledger.path):
+            return ledger
+        try:
+            with open(ledger.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entries = data.get("files") if isinstance(data, dict) else None
+            if isinstance(entries, dict):
+                ledger.entries = {k: v for k, v in entries.items() if isinstance(v, dict)}
+                ledger._loaded_from_disk = True
+                print(
+                    f"[repeat-ledger] Loaded {len(ledger.entries)} previously anonymized "
+                    f"file record(s) from {ledger.path!r}."
+                )
+        except (OSError, ValueError) as exc:
+            # A damaged or hand-edited ledger must never stop an
+            # anonymization run. Starting empty means already-done files get
+            # done again -- which is the behaviour this mechanism improves
+            # on, not a regression. Losing the run would be strictly worse.
+            print(f"[repeat-ledger] WARNING: could not read {ledger.path!r} ({exc}); starting empty.")
+        return ledger
+
+    # ---- queries ----------------------------------------------------------
+
+    def lookup(self, digest: str) -> Optional[Dict]:
+        return self.entries.get(digest)
+
+    def outputs_for(self, digest: str) -> List[str]:
+        entry = self.entries.get(digest) or {}
+        outputs = entry.get("outputs")
+        return list(outputs) if isinstance(outputs, list) else []
+
+    # ---- updates ----------------------------------------------------------
+
+    def record(
+        self,
+        digest: str,
+        *,
+        anon_id: str,
+        study: str,
+        name: str,
+        size: int,
+        output_rel: Optional[str] = None,
+    ) -> None:
+        now = _utc_stamp()
+        entry = self.entries.get(digest)
+        if entry is None:
+            entry = {"first_seen": now, "outputs": []}
+            self.entries[digest] = entry
+        entry["anon_id"] = anon_id
+        entry["study"] = study
+        entry["name"] = name
+        entry["size"] = size
+        entry["last_seen"] = now
+        if output_rel:
+            outputs = entry.setdefault("outputs", [])
+            if output_rel not in outputs:
+                outputs.append(output_rel)
+
+    def touch(self, digest: str) -> None:
+        """Mark a known file as seen again without changing what it maps to
+        (used when a submission is recognised as a repeat and skipped)."""
+        entry = self.entries.get(digest)
+        if entry is not None:
+            entry["last_seen"] = _utc_stamp()
+
+    def save(self) -> None:
+        """Write atomically. A half-written ledger would be unparseable next
+        session, and this file is the only record of what has already been
+        anonymized."""
+        payload = {"version": LEDGER_VERSION, "_notice": LEDGER_NOTICE, "files": self.entries}
+        parent = os.path.dirname(self.path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=1, sort_keys=True)
+        os.replace(tmp, self.path)
+        print(f"[repeat-ledger] Saved {len(self.entries)} file record(s) to {self.path!r}.")
+
+
+@dataclass
+class RepeatVerdict:
+    """How one patient's submission relates to what was already anonymized."""
+
+    verdict: str  # "new" | "duplicate" | "recreate" | "partial"
+    total: int
+    already: int
+    fresh: int
+    outputs_present: bool
+    repeated_names: List[str] = field(default_factory=list)
+    conflicts: List[Dict[str, str]] = field(default_factory=list)
+
+    @property
+    def skip(self) -> bool:
+        """True only when every file was already anonymized under THIS
+        Anonymized ID and everything it produced is still on disk. If an
+        output has since been deleted, or the destination changed, the work
+        is redone instead -- "already anonymized" must never mean "and you
+        have nothing to show for it"."""
+        return self.verdict == "duplicate"
+
+
+def classify_repeat(
+    fingerprints: List[Tuple[str, str, int]],
+    anon_id: str,
+    ledger: "ProcessedFileLedger",
+    outputs_exist: bool,
+) -> RepeatVerdict:
+    """
+    Decide whether this patient's files are new material, a genuine
+    follow-up, or the same documents handed over a second time.
+
+    `fingerprints` is [(display_name, sha256, size_bytes)] for every source
+    file this run would process; `outputs_exist` says whether everything a
+    previous run wrote for them is still present at the CURRENT destination.
+
+    A file already in the ledger under a DIFFERENT Anonymized ID is reported
+    as a conflict and never counted as "already done". That state means one
+    source document has been anonymized twice under two IDs -- normally
+    because the mapping CSV was replaced or a different one was selected --
+    which inflates the cohort with a duplicate subject. It is the operator's
+    to resolve, so it is surfaced rather than quietly absorbed either way.
+    """
+    already = 0
+    repeated_names: List[str] = []
+    conflicts: List[Dict[str, str]] = []
+
+    for name, digest, _size in fingerprints:
+        entry = ledger.lookup(digest)
+        if entry is None:
+            continue
+        previous_id = str(entry.get("anon_id", "") or "")
+        if not previous_id:
+            # A record that names no Anonymized ID (truncated write, hand
+            # edit) cannot be attributed to anyone, so it proves nothing.
+            # Counting it as "already done" would let one malformed row mark
+            # any patient's files as a duplicate and skip them.
+            continue
+        if previous_id != anon_id:
+            conflicts.append({"name": name, "previous_id": previous_id})
+            continue
+        already += 1
+        repeated_names.append(name)
+
+    total = len(fingerprints)
+    fresh = total - already - len(conflicts)
+
+    if total == 0 or already == 0:
+        verdict = "new"
+    elif already == total:
+        verdict = "duplicate" if outputs_exist else "recreate"
+    else:
+        verdict = "partial"
+
+    return RepeatVerdict(
+        verdict=verdict,
+        total=total,
+        already=already,
+        fresh=fresh,
+        outputs_present=outputs_exist,
+        repeated_names=repeated_names,
+        conflicts=conflicts,
+    )
 
 
 def find_pdfs_recursive(root_dir: str) -> List[str]:
