@@ -18,6 +18,31 @@ desktop_app/build/dist/
 .DS_Store
 Thumbs.db
 
+# ==========================================================================
+# PATIENT DATA -- MUST NEVER BE COMMITTED
+# ==========================================================================
+# These are the folders operators drop real patient packages into. They
+# contain unredacted PHI: real names, CR/Lab numbers, DICOM ultrasound
+# images and clinical report PDFs. This repo is pushed to GitHub, so a
+# single `git add -A` with these tracked would publish patient data
+# irreversibly (deleting the commit afterwards does not un-publish it --
+# it stays in forks, clones and caches).
+/eGFR/
+/KFRE/
+
+# Defence in depth for patient files dumped anywhere else in the tree
+# (a scratch folder, a copied package, an operator's test run). There is
+# no legitimate reason for any of these to be in version control.
+*.dcm
+*.DCM
+*.pdf
+*.PDF
+
+# NOTE: the *.pdf rule above is deliberately broad because KFRE packages
+# are PDF-only, so an unignored PDF is a plausible PHI leak. If you ever
+# genuinely need to commit a NON-patient PDF (a spec, a form template),
+# add it explicitly and knowingly:  git add -f path/to/doc.pdf
+
 # --- App runtime data (never applicable inside the repo, but guards against an
 # accidental local run writing here instead of %LOCALAPPDATA%) ---
 Anonymized_eGFR/
