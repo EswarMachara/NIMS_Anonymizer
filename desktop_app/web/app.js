@@ -22,6 +22,7 @@ const els = {
   chooseFolderBtn: document.getElementById("choose-folder-btn"),
   chooseFilesBtn: document.getElementById("choose-files-btn"),
   packageTile: document.getElementById("package-tile"),
+  progressTrack: document.getElementById("progress-track"),
   studyButtons: {
     "": document.getElementById("study-auto"),
     egfr: document.getElementById("study-egfr"),
@@ -83,6 +84,28 @@ function setStudyOverride(value) {
 
 Object.entries(els.studyButtons).forEach(([key, btn]) => {
   btn?.addEventListener("click", () => setStudyOverride(key));
+});
+
+// ---------------------------------------------------------------------
+// Expected-layout explainer (eGFR / KFRE)
+// ---------------------------------------------------------------------
+// The two studies arrive in genuinely different shapes: eGFR as one folder
+// per patient holding kidney subfolders plus loose report PDFs, KFRE as a
+// single flat folder of every patient's PDFs. Showing one generic tree for
+// both misdescribed both, so each is drawn as it really is.
+
+document.querySelectorAll("[data-layout]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const wanted = btn.dataset.layout;
+    document.querySelectorAll("[data-layout]").forEach((b) => {
+      const active = b.dataset.layout === wanted;
+      b.classList.toggle("active", active);
+      b.setAttribute("aria-selected", String(active));
+    });
+    document.querySelectorAll("[data-layout-view]").forEach((view) => {
+      view.classList.toggle("hidden", view.dataset.layoutView !== wanted);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------
@@ -158,8 +181,11 @@ async function runProcess(paths, isFolder) {
   state.processing = true;
   setStep(1);
   els.packageTile?.classList.add("tile-has-file");
-  els.statusCard.textContent = `Processing ${paths.length} item(s)…`;
+  els.statusCard.textContent = isFolder
+    ? "Reading the selection and anonymizing. A folder of many patients can take a while."
+    : `Anonymizing ${paths.length} file(s).`;
   els.statusCard.classList.add("processing");
+  els.progressTrack?.classList.remove("hidden");
   els.resultBanner.classList.add("hidden");
   els.previewGrid.classList.add("hidden");
   [els.resetBtn, els.revealBtn, els.approveBtn].forEach((b) => b && (b.disabled = true));
@@ -172,6 +198,7 @@ async function runProcess(paths, isFolder) {
     renderResult({ success: false, errors: [`Unexpected error: ${err}`] });
   } finally {
     state.processing = false;
+    els.progressTrack?.classList.add("hidden");
   }
 }
 
@@ -179,7 +206,7 @@ function renderResult(result) {
   setStep(2);
   els.statusCard.classList.remove("processing");
 
-  const studyLabel = result.study === "egfr" ? "eGFR" : result.study === "kfre" ? "KFRE" : "—";
+  const studyLabel = result.study === "egfr" ? "eGFR" : result.study === "kfre" ? "KFRE" : "not detected";
   if (els.studyDetectedNote) {
     els.studyDetectedNote.textContent = result.study
       ? `Detected study type for this package: ${studyLabel}${state.studyOverride ? " (manual override)" : " (auto-detected)"}.`
@@ -199,7 +226,7 @@ function renderResult(result) {
     els.resultBanner.innerHTML = `
       <strong>Anonymization complete (${studyLabel})</strong>
       Anonymized ID: <span class="anon-id-pill">${escapeHTML(result.anon_id)}</span>
-      ${result.is_new_id ? " — new patient" : " — existing patient, ID reused (follow-up visit)"}
+      ${result.is_new_id ? " (new patient)" : " (existing patient, ID reused for this follow-up visit)"}
     `;
     els.revealBtn.disabled = false;
     els.approveBtn.disabled = false;
@@ -276,7 +303,7 @@ function renderBatchResult(result, studyLabel) {
   els.resultBanner.className = `result-banner ${result.success ? "success" : s.succeeded ? "warn" : "error"}`;
   const batchErrs = (result.errors || []).map((e) => `<li>${escapeHTML(e)}</li>`).join("");
   els.resultBanner.innerHTML = `
-    <strong>Batch anonymization (${studyLabel}) &mdash; ${escapeHTML(String(s.succeeded || 0))} of
+    <strong>Batch anonymization (${studyLabel}): ${escapeHTML(String(s.succeeded || 0))} of
       ${escapeHTML(String(s.total || 0))} patient(s) succeeded</strong>
     ${s.new_ids || 0} new ID(s), ${s.reused_ids || 0} reused (follow-up visits).
     ${batchErrs ? `<ul>${batchErrs}</ul>` : ""}
@@ -387,7 +414,7 @@ function selectCrosscheckTab(tab) {
 
   const items = (ccState.manifest && ccState.manifest[tab]) || [];
   els.crosscheckHint.textContent = {
-    images: "Scroll through every ultrasound frame. Check that the burned-in banner across the top of each image is blanked in the anonymized copy — tag anonymization alone does not remove text printed into the pixels.",
+    images: "Scroll through every ultrasound frame. Check that the burned-in banner across the top of each image is blanked in the anonymized copy. Clearing tags does not remove text printed into the pixels.",
     metadata: "Tag-by-tag comparison. Changed and removed tags are listed first; unchanged tags are collapsed.",
     reports: "Each report page, original beside anonymized. Check that every patient identifier is blacked out.",
   }[tab] || "";

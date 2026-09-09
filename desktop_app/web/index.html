@@ -32,9 +32,9 @@
       <div>
         <span class="eyebrow">PII removal workflow · Runs fully offline</span>
         <h1>Renal Study Anonymizer</h1>
-        <p>Select one patient's eGFR or KFRE package &mdash; or a folder holding many patients
-          &mdash; then cross-check the originals against the anonymized output side by side.
-          Nothing leaves this computer.</p>
+        <p>Select one patient's eGFR or KFRE package, or a folder holding many patients.
+          Then cross-check the originals against the anonymized output, side by side,
+          before you keep anything. Nothing leaves this computer.</p>
       </div>
       <div class="anon-hero-steps" aria-label="Anonymization workflow">
         <div id="step-1" class="step-active"><span>1</span><strong>Select package</strong><small>Folder, files, or drag &amp; drop</small></div>
@@ -48,16 +48,61 @@
         <div class="anon-card-head">
           <span class="eyebrow">Expected input</span>
           <h2>One patient, or a whole folder of them</h2>
-          <p>Point at a single patient's folder, or at a folder containing many patient
-            subfolders &mdash; each is anonymized independently, with its own Anonymized ID.
-            Any of these layouts work; files are classified by content, not by folder name.</p>
+          <p>Point at a single patient's folder, or at the folder containing all of them.
+            Each patient is anonymized independently and gets its own Anonymized ID.
+            Files are identified by their contents, so folder names do not have to match.</p>
         </div>
-        <div class="anon-folder-tree" aria-label="Expected folder structure">
-          <div><strong>Patient_Folder/</strong></div>
-          <div><span>├─</span> Left_Kidney_Images/ <small>DICOM (eGFR only)</small></div>
-          <div><span>├─</span> Right_Kidney_Images/ <small>DICOM (eGFR only)</small></div>
-          <div><span>├─</span> Ultrasound_Reports/ <small>PDF</small></div>
-          <div><span>└─</span> Lab_Reports/ <small>PDF (KFRE: PDFs only, no images)</small></div>
+
+        <div class="layout-explainer">
+          <div class="layout-switch" role="tablist" aria-label="Expected folder layout by study">
+            <button type="button" role="tab" class="active" data-layout="egfr" aria-selected="true">eGFR</button>
+            <button type="button" role="tab" data-layout="kfre" aria-selected="false">KFRE</button>
+          </div>
+
+          <div class="layout-view" data-layout-view="egfr">
+            <p class="layout-note">Ultrasound images and reports, one folder per patient.</p>
+            <ul class="filetree">
+              <li class="ft-folder ft-root">
+                <span class="ft-name">eGFR</span>
+                <span class="ft-tag">select for all patients</span>
+                <ul>
+                  <li class="ft-folder ft-highlight">
+                    <span class="ft-name">NP1 (CKD)</span>
+                    <span class="ft-tag">or select one patient</span>
+                    <ul>
+                      <li class="ft-folder"><span class="ft-name">left kidney</span><span class="ft-badge ft-dcm">DICOM</span></li>
+                      <li class="ft-folder"><span class="ft-name">right kidney</span><span class="ft-badge ft-dcm">DICOM</span></li>
+                      <li class="ft-file"><span class="ft-name">NP1 sr creatinine.pdf</span><span class="ft-badge ft-pdf">PDF</span></li>
+                      <li class="ft-file"><span class="ft-name">NP1 UPCR.pdf</span><span class="ft-badge ft-pdf">PDF</span></li>
+                      <li class="ft-file"><span class="ft-name">NP1 CRF.pdf</span><span class="ft-badge ft-pdf">PDF</span></li>
+                    </ul>
+                  </li>
+                  <li class="ft-folder ft-dim"><span class="ft-name">NP2 (CKD)</span><span class="ft-tag">same shape</span></li>
+                  <li class="ft-ellipsis">one folder per patient</li>
+                </ul>
+              </li>
+            </ul>
+            <p class="layout-foot">Reports sit directly in the patient's folder. Kidney subfolders may be
+              named any way round, upper or lower case.</p>
+          </div>
+
+          <div class="layout-view hidden" data-layout-view="kfre">
+            <p class="layout-note">Lab reports only, no images and no per patient folders.</p>
+            <ul class="filetree">
+              <li class="ft-folder ft-root">
+                <span class="ft-name">KFRE</span>
+                <span class="ft-tag">select this folder</span>
+                <ul>
+                  <li class="ft-file"><span class="ft-name">Sr.CR KFRE 1.pdf</span><span class="ft-badge ft-pdf">PDF</span></li>
+                  <li class="ft-file"><span class="ft-name">UACR KFRE 1.pdf</span><span class="ft-badge ft-pdf">PDF</span></li>
+                  <li class="ft-file ft-dim"><span class="ft-name">Sr.CR KFRE 2.pdf</span><span class="ft-badge ft-pdf">PDF</span></li>
+                  <li class="ft-ellipsis">all patients' reports together</li>
+                </ul>
+              </li>
+            </ul>
+            <p class="layout-foot">Every patient's reports sit side by side in one folder. They are grouped
+              by the CR No or Lab No. printed inside each PDF, never by filename.</p>
+          </div>
         </div>
         <div class="anon-policy-grid">
           <div>
@@ -89,18 +134,26 @@
 
         <div class="upload-grid">
           <div class="upload-tile wide" id="package-tile">
-            <span class="upload-title">DROP PATIENT PACKAGE HERE</span>
+            <span class="upload-icon" aria-hidden="true"></span>
+            <span class="upload-title">Drop a patient package here</span>
             <span class="upload-subtitle">Or use one of the buttons below</span>
             <div class="upload-guidance">
-              <span><strong>Tip:</strong> "Choose Folder" is the most reliable option &mdash; it captures a whole
-                patient package (images + reports) in one action, and works just as well on a folder
-                containing many patients.</span>
+              <span><strong>Tip:</strong> "Choose Folder" is the most reliable option. It captures a whole
+                patient package, images and reports together, in one action, and works just as well on a
+                folder containing many patients.</span>
             </div>
             <div class="package-upload-actions">
-              <button type="button" class="package-upload-action" id="choose-folder-btn">Choose Folder</button>
+              <button type="button" class="package-upload-action is-primary" id="choose-folder-btn">Choose Folder</button>
               <button type="button" class="package-upload-action" id="choose-files-btn">Choose Files</button>
             </div>
             <div class="anon-status-card" id="status-card">No package selected</div>
+            <!-- Indeterminate: the engine reports no incremental progress, and a
+                 fake percentage would be a lie. A whole folder of patients can
+                 take well over half a minute, so some visible sign of life is
+                 needed or the window reads as frozen. -->
+            <div class="progress-track hidden" id="progress-track" role="progressbar" aria-label="Anonymizing">
+              <div class="progress-bar"></div>
+            </div>
           </div>
         </div>
 
@@ -138,7 +191,7 @@
           </section>
           <section class="anon-preview-panel" aria-labelledby="output-title">
             <h3 id="output-title">Anonymized output</h3>
-            <p>Written to the app's private output folder — see below.</p>
+            <p>Written to the app's private output folder, shown at the foot of this window.</p>
             <div class="anon-file-list" id="output-list"></div>
           </section>
         </div>
@@ -184,7 +237,7 @@
 
   <footer class="app-footer">
     <strong>Where things are kept:</strong> the anonymized output and the confidential ID-mapping file
-    never leave this computer. Mapping file (access-restricted — this is the only file that still links an
+    never leave this computer. Mapping file (access-restricted, and the only file that still links an
     Anonymized ID to a real patient): <code id="footer-mapping-path" title="Click to open containing folder">…</code>
     · Output folder: <code id="footer-output-path" title="Click to open containing folder">…</code>
   </footer>

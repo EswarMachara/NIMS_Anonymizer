@@ -56,6 +56,20 @@ button {
   font-family: inherit;
 }
 
+/* Keyboard focus. A clinical workstation is often driven without a mouse,
+   and the browser default outline is invisible against these teal
+   surfaces. :focus-visible so it appears for keyboard users without
+   ringing every mouse click. */
+:where(button, [role="tab"], code, summary, a):focus-visible {
+  outline: 3px solid rgba(15, 154, 135, 0.55);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+/* Anything that reads as pressable should say so on hover. */
+button:not(:disabled) { transition: transform 0.12s ease, background 0.2s ease, box-shadow 0.2s ease, color 0.2s ease; }
+button:not(:disabled):active { transform: translateY(1px); }
+
 .btn-secondary {
   border: 0;
   border-radius: 10px;
@@ -272,22 +286,134 @@ button {
 
 .anon-card-head p { margin: 0; color: #526376; line-height: 1.65; font-size: 0.96rem; }
 
-.anon-folder-tree {
+/* ---- Expected-layout explainer (real eGFR / KFRE shapes) ---- */
+
+.layout-explainer {
   margin: 1.5rem 0;
-  font-family: inherit;
-  color: #17324d;
-  line-height: 2;
-  border: 1px solid rgba(20, 134, 140, 0.16);
-  border-radius: 16px;
-  background: linear-gradient(135deg, #f8ffff 0%, #eef9f7 100%);
-  padding: 1.1rem 1.3rem;
-  font-size: 0.9rem;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(20, 134, 140, 0.18);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #fbffff 0%, #f2fbf9 100%);
+  overflow: hidden;
 }
 
-.anon-folder-tree strong { color: #073f45; }
-.anon-folder-tree span { color: #0a6b6f; font-weight: 700; }
-.anon-folder-tree small { color: #64748b; font-family: inherit; }
+.layout-switch {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid rgba(20, 134, 140, 0.14);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.layout-switch button {
+  flex: 1;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.86rem;
+  padding: 0.55rem 0.8rem;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.layout-switch button:hover { background: rgba(20, 134, 140, 0.08); color: var(--teal-dark); }
+
+.layout-switch button.active {
+  background: #ffffff;
+  color: var(--teal-dark);
+  box-shadow: 0 2px 10px rgba(15, 154, 135, 0.18), inset 0 0 0 1px rgba(15, 154, 135, 0.32);
+}
+
+.layout-view { padding: 1.15rem 1.3rem 1.3rem; }
+.layout-note { margin: 0 0 1rem; color: var(--text-secondary); font-size: 0.87rem; line-height: 1.55; }
+.layout-foot {
+  margin: 1rem 0 0;
+  padding-top: 0.85rem;
+  border-top: 1px dashed rgba(10, 107, 111, 0.2);
+  color: #64748b;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+/* File tree. Guides are drawn with borders rather than box-drawing
+   characters so they line up at any font size and never wrap oddly. */
+
+.filetree, .filetree ul { list-style: none; margin: 0; padding: 0; }
+.filetree ul { margin-left: 0.72rem; padding-left: 1.05rem; border-left: 1px solid rgba(10, 107, 111, 0.22); }
+
+.filetree li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.3rem 0;
+  font-size: 0.87rem;
+  color: #17324d;
+}
+
+.filetree ul > li::before {
+  content: "";
+  position: absolute;
+  left: -1.05rem;
+  top: 1.05rem;
+  width: 0.78rem;
+  height: 1px;
+  background: rgba(10, 107, 111, 0.22);
+}
+
+/* Folder / file glyphs, drawn as inline SVG data URIs so there is one
+   definition per kind and nothing depends on an icon font being present. */
+.ft-folder > .ft-name, .ft-file > .ft-name {
+  padding-left: 1.5rem;
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 1.05rem 1.05rem;
+}
+
+.ft-folder > .ft-name {
+  font-weight: 700;
+  color: #0a4a4e;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230a9f95' stroke-width='1.9' stroke-linejoin='round'%3E%3Cpath d='M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2c.5 0 .97.25 1.25.66l.8 1.18c.28.41.75.66 1.25.66h6.5A1.5 1.5 0 0 1 20 10v7.5A1.5 1.5 0 0 1 18.5 19h-14A1.5 1.5 0 0 1 3 17.5z'/%3E%3C/svg%3E");
+}
+
+.ft-file > .ft-name {
+  color: #17324d;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='1.8' stroke-linejoin='round'%3E%3Cpath d='M6 3.5h7L18.5 9v11.5A1 1 0 0 1 17.5 21h-11a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1z'/%3E%3Cpath d='M13 3.5V9h5.5'/%3E%3C/svg%3E");
+}
+
+.ft-root > .ft-name { font-size: 0.95rem; color: #073f45; }
+
+.ft-badge {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+.ft-dcm { background: #e0f2fe; color: #075985; }
+.ft-pdf { background: #fee2e2; color: #9f1239; }
+
+.ft-tag {
+  padding: 0.12rem 0.55rem;
+  border-radius: 999px;
+  border: 1px dashed rgba(15, 154, 135, 0.45);
+  background: rgba(15, 154, 135, 0.07);
+  color: var(--teal-dark);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.ft-highlight > .ft-name { color: var(--teal-dark); }
+.ft-dim { opacity: 0.6; }
+.ft-ellipsis {
+  padding-left: 1.5rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  font-style: italic;
+}
 
 .anon-policy-grid { display: grid; gap: 1rem; }
 
@@ -366,8 +492,53 @@ button {
   box-shadow: 0 0 0 3px rgba(20, 134, 140, 0.1);
 }
 
-.upload-title { font-size: 1rem; letter-spacing: 0.07em; }
+.upload-icon {
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 0.35rem;
+  border-radius: 14px;
+  background-color: rgba(15, 154, 135, 0.1);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f9a87' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8.2A1.7 1.7 0 0 1 4.7 6.5h4.1c.5 0 .98.24 1.27.66l.78 1.1c.3.42.77.66 1.28.66h6.17A1.7 1.7 0 0 1 20 10.6v6.7a1.7 1.7 0 0 1-1.7 1.7H4.7A1.7 1.7 0 0 1 3 17.3z'/%3E%3Cpath d='M12 16v-5.4M9.6 12.9 12 10.5l2.4 2.4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 26px 26px;
+  transition: transform 0.2s ease, background-color 0.2s ease;
+}
+
+.upload-tile.drag-over .upload-icon { transform: scale(1.08); background-color: rgba(15, 154, 135, 0.2); }
+
+.upload-title { font-size: 1.02rem; font-weight: 800; color: #0a4a4e; letter-spacing: 0.01em; }
 .upload-subtitle { font-size: 0.88rem; color: var(--text-secondary); }
+
+/* Indeterminate progress. The engine reports no incremental progress, so a
+   percentage would be invented; this only signals "still working", which is
+   what a 30-second-plus batch actually needs. */
+.progress-track {
+  position: relative;
+  height: 4px;
+  margin-top: 0.85rem;
+  border-radius: 999px;
+  background: rgba(15, 154, 135, 0.16);
+  overflow: hidden;
+}
+
+.progress-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(15, 154, 135, 0.25), #0f9a87, rgba(15, 154, 135, 0.25));
+  animation: progress-sweep 1.15s ease-in-out infinite;
+}
+
+@keyframes progress-sweep {
+  0%   { left: -40%; }
+  100% { left: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar { animation: none; left: 0; width: 100%; opacity: 0.55; }
+}
 
 .upload-guidance {
   border: 1px solid rgba(14, 106, 111, 0.18);
@@ -408,6 +579,17 @@ button {
 
 .package-upload-action:hover { background: #e9fbf8; box-shadow: 0 8px 18px rgba(20, 134, 140, 0.12); }
 .package-upload-action:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* "Choose Folder" is the recommended path (it captures a whole package in
+   one action), so it is weighted ahead of "Choose Files" rather than the
+   two looking equally viable. */
+.package-upload-action.is-primary {
+  background: #0f9a87;
+  border-color: #0f9a87;
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(15, 154, 135, 0.25);
+}
+.package-upload-action.is-primary:hover { background: var(--teal-dark); border-color: var(--teal-dark); }
 
 .anon-status-card {
   margin-top: 0.8rem;
