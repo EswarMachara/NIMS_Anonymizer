@@ -31,16 +31,29 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 if getattr(sys, "frozen", False):
-    # Running as a PyInstaller-built .exe: anon_common.py / anonymize_eGFR.py
-    # / anonymize_KFRE.py are bundled as plain data files directly into the
-    # frozen app (see build/app.spec's `datas` list) rather than living at
-    # a real "../.." path relative to this file -- sys._MEIPASS is
-    # PyInstaller's own extraction directory at runtime.
-    PROJECT_ROOT = sys._MEIPASS  # type: ignore[attr-defined]
+    # Running as a PyInstaller-built .exe. anon_common / anonymize_eGFR /
+    # anonymize_KFRE are bundled as MODULES (see build/app.spec's
+    # `hiddenimports`) and are already importable through PyInstaller's own
+    # importer, so nothing needs adding to sys.path here.
+    #
+    # Deliberately do NOT insert sys._MEIPASS into sys.path. In a onedir
+    # build _MEIPASS is the `_internal` directory, which also holds
+    # numpy's C extensions (numpy/_core/_multiarray_umath...pyd). Putting
+    # it on sys.path gives numpy a SECOND import route -- the ordinary
+    # filesystem finder -- competing with the frozen importer that already
+    # serves numpy's Python code from the embedded archive. CPython then
+    # refuses the extension outright with "cannot load module more than
+    # once per process", and pydicom catches that and reports its own
+    # generic "NumPy is required when converting pixel data to an ndarray",
+    # so every ultrasound image fails for a reason that names the wrong
+    # cause. Cost us two misdiagnosed builds.
+    PROJECT_ROOT = sys._MEIPASS  # type: ignore[attr-defined]  # data files only, never sys.path
 else:
+    # Running from source: the three engine scripts really do live two
+    # levels up (project root), and that path genuinely must be importable.
     PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
 
 import anon_common as ac  # noqa: E402
 import anonymize_eGFR as eg  # noqa: E402

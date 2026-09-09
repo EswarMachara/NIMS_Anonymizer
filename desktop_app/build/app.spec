@@ -13,7 +13,7 @@
 
 import sys
 
-from PyInstaller.utils.hooks import copy_metadata
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 block_cipher = None
 
@@ -47,7 +47,16 @@ DICOM_DECODER_HIDDENIMPORTS = [
     'pydicom.pixels.decoders',
     'pydicom.pixels.decoders.pylibjpeg',
     'pydicom.pixels.decoders.pillow',
-]
+] + collect_submodules('numpy._core')
+# numpy._core's internals import their own submodules dynamically, so the
+# bare 'numpy' hiddenimport above still left numpy._core._exceptions out of
+# the bundle (confirmed: 280 numpy modules collected, 26 under numpy._core,
+# that one absent). numpy's C-extension import then failed, and every later
+# `import numpy` in the process reported the misleading "cannot load module
+# more than once per process" instead -- which pydicom relabelled again as
+# "NumPy is required...". Enumerating the package rather than trusting the
+# import graph stops that class of gap; scoped to numpy._core specifically
+# instead of all of numpy, to avoid dragging in f2py/distutils/testing.
 DICOM_DECODER_METADATA = (
     copy_metadata('pylibjpeg')
     + copy_metadata('pylibjpeg-libjpeg')

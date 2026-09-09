@@ -118,15 +118,25 @@ jobs:
         working-directory: desktop_app/build
         shell: pwsh
         run: |
-          $exe = "dist/TANUH-Renal-Anonymizer/TANUH-Renal-Anonymizer.exe"
-          # console=False in app.spec, so the app has no stdout attached to
-          # this shell -- the exit code is the contract, and self_test()
-          # prints its detail into the app's own console buffer.
-          & $exe --self-test
-          $code = $LASTEXITCODE
-          Write-Host "self-test exit code: $code"
-          if ($code -ne 0) {
-            throw "The built executable failed its own self-test (exit $code) -- it would ship unable to anonymize ultrasound images. See main.py self_test()."
+          $exe = Resolve-Path "dist/TANUH-Renal-Anonymizer/TANUH-Renal-Anonymizer.exe"
+          $out = Join-Path $env:RUNNER_TEMP "selftest-stdout.txt"
+          $err = Join-Path $env:RUNNER_TEMP "selftest-stderr.txt"
+
+          # app.spec sets console=False, so this is a GUI-subsystem binary:
+          # the calling shell does NOT wait for it and $LASTEXITCODE is never
+          # set. The first version of this step used `& $exe; $LASTEXITCODE`
+          # and so threw "failed its own self-test (exit )" -- with an empty
+          # exit code -- on every run, pass or fail. Start-Process -Wait
+          # -PassThru is the only way to get a real exit code here, and the
+          # redirects are what make a failure diagnosable in the log.
+          $p = Start-Process -FilePath $exe -ArgumentList "--self-test" `
+                 -Wait -PassThru -NoNewWindow `
+                 -RedirectStandardOutput $out -RedirectStandardError $err
+          Get-Content $out -ErrorAction SilentlyContinue
+          Get-Content $err -ErrorAction SilentlyContinue
+          Write-Host "self-test exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) {
+            throw "The built executable failed its own self-test (exit $($p.ExitCode)) -- it would ship unable to anonymize ultrasound images. See the self-test output above and main.py self_test()."
           }
           Write-Host "Built executable passed its self-test."
 

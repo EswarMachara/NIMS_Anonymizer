@@ -37,7 +37,29 @@ else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(APP_DIR, "web")
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# numpy is imported here, before `backend.engine` pulls in pydicom (and
+# through it pylibjpeg, which imports numpy itself). Two reasons:
+#
+#  1. Diagnostics. If numpy's import fails, the FIRST failure is the real
+#     one; by the time anything else has touched it, a rolled-back partial
+#     import leaves the C extension registered and every later attempt
+#     reports the useless "cannot load module more than once per process"
+#     instead of the actual cause.
+#  2. It makes the successful module the one everything downstream shares,
+#     rather than each consumer racing to initialise it.
+try:
+    import numpy  # noqa: F401
+    _NUMPY_IMPORT_TRACEBACK = None
+except Exception:  # noqa: BLE001
+    _NUMPY_IMPORT_TRACEBACK = traceback.format_exc()
+
+if not getattr(sys, "frozen", False):
+    # Source runs need this directory importable so `from backend import
+    # engine` resolves. When FROZEN it must be skipped: __file__ then sits
+    # inside sys._MEIPASS (the onedir `_internal` folder), so this would put
+    # the bundle's own binary directory on sys.path and give numpy a second,
+    # competing import route -- see the matching note in backend/engine.py.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from backend import engine  # noqa: E402
 
 
@@ -241,11 +263,31 @@ def self_test() -> int:
     """
     problems = []
 
+    if _NUMPY_IMPORT_TRACEBACK:
+        # The first, real numpy failure, captured at module import time before
+        # anything else could turn it into "cannot load module more than once".
+        problems.append("numpy failed to import at startup (first failure, see traceback)")
+        print("numpy FIRST import traceback:")
+        print(_NUMPY_IMPORT_TRACEBACK)
+
     try:
         import numpy
         print(f"numpy: OK ({numpy.__version__})")
+        print(f"       numpy.__file__ = {getattr(numpy, '__file__', '?')}")
     except Exception as exc:  # noqa: BLE001
+        # Full traceback, not just the message: the failure that cost two
+        # builds here ("cannot load module more than once per process") says
+        # nothing about WHICH import route collided, and pydicom relabels it
+        # as "NumPy is required..." further up. The frame list is the only
+        # thing that actually locates it.
         problems.append(f"numpy is not importable in this build: {exc}")
+        print("numpy import traceback:")
+        traceback.print_exc()
+        print(f"  sys.frozen   = {getattr(sys, 'frozen', False)}")
+        print(f"  sys._MEIPASS = {getattr(sys, '_MEIPASS', '<unset>')}")
+        print("  sys.path:")
+        for entry in sys.path:
+            print(f"    - {entry}")
 
     try:
         from pydicom.pixels import get_decoder
