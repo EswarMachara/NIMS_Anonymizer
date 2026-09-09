@@ -242,8 +242,19 @@ jobs:
           $unins = Get-ChildItem $app -Filter "unins*.exe" | Select-Object -First 1
           $u = Start-Process -FilePath $unins.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
           if ($u.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($u.ExitCode)" }
-          Start-Sleep -Seconds 3
-          if (Test-Path $app) { throw "Uninstall left $app behind" }
+
+          # -Wait is not enough on its own. Inno's uninstaller copies itself
+          # to %TEMP% and relaunches from there so it can delete its own
+          # folder, and the process we started exits as soon as the copy
+          # takes over. Poll for the result instead of guessing at a sleep,
+          # or this step fails intermittently on a slow runner for reasons
+          # that have nothing to do with the build.
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Test-Path $app) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+          if (Test-Path $app) {
+            Get-ChildItem $app -Recurse -File | Select-Object -First 20 FullName
+            throw "Uninstall left $app behind after 60s"
+          }
           if (Test-Path $shortcut) { throw "Uninstall left the Start Menu shortcut behind" }
           Write-Host "Uninstall was clean."
 
