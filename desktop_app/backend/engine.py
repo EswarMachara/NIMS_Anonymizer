@@ -189,6 +189,31 @@ def detect_study_type(package_dir: str) -> str:
     return "kfre"
 
 
+def detect_study_for_selection(paths: List[str], is_folder: bool) -> str:
+    """
+    The same answer process_package() will reach, obtainable BEFORE any work
+    starts, so the UI can show which study's mapping CSV and output folder
+    this run will actually use.
+
+    That mattered more than it sounds: the session panel used to assume
+    "egfr" whenever the study picker was on Auto-detect, so pointing the app
+    at a KFRE folder left it advertising an eGFR_anony_Mapping.csv path that
+    the run then never wrote to.
+
+    Mirrors process_package()'s own two branches rather than approximating
+    them. A folder selection is walked by detect_study_type(); a flat file
+    selection is staged first there, and since staging copies exactly the
+    files given, testing those names for a .dcm is equivalent to walking the
+    staging directory -- without paying to copy real patient data into temp
+    just to answer a question about it.
+    """
+    if is_folder:
+        return detect_study_type(paths[0]) if paths else "egfr"
+    if any(str(p).lower().endswith(".dcm") for p in paths or []):
+        return "egfr"
+    return "kfre"
+
+
 def stage_selected_files(file_paths: List[str]) -> str:
     """
     "Choose Files" mode: the user multi-selected individual files rather

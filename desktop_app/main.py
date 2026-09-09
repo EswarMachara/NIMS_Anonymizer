@@ -138,6 +138,18 @@ class Api:
             return {"picked": False}
         return {"picked": True, "path": result[0]}
 
+    def detect_study(self, paths, is_folder):
+        """Which study this selection is, before anonymizing it -- so the
+        session panel can show the mapping CSV and output folder the run
+        will really use rather than assuming eGFR."""
+        try:
+            return {
+                "success": True,
+                "study": engine.detect_study_for_selection(list(paths or []), bool(is_folder)),
+            }
+        except Exception as exc:  # noqa: BLE001 -- a failed guess must not block the run
+            return {"success": False, "errors": [str(exc)]}
+
     def pick_output_folder(self):
         """Choose where anonymized output is written (a per-study subfolder
         is still created inside it, so two studies can share one

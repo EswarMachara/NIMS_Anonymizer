@@ -65,6 +65,11 @@ const els = {
 
 let state = {
   studyOverride: "", // "" = auto-detect, "egfr", "kfre"
+  // What auto-detect actually found for the current selection. Each study
+  // has its own mapping CSV and output subfolder, so until this is known
+  // the panel can only guess -- and guessing "egfr" while the operator
+  // feeds it a KFRE folder is how it ended up naming a file no run wrote.
+  detectedStudy: null,
   lastResult: null,
   processing: false,
   appDataDir: null, // shared parent of both mapping CSVs + both output folders (see loadAppInfo())
@@ -95,6 +100,13 @@ function setStudyOverride(value) {
   Object.entries(els.studyButtons).forEach(([key, btn]) => {
     if (btn) btn.classList.toggle("active", key === value);
   });
+}
+
+// Which study this run will really use. A manual override wins; otherwise
+// whatever auto-detect found for the current selection; and only with
+// nothing selected yet does it fall back to a default.
+function effectiveStudy() {
+  return state.studyOverride || state.detectedStudy || "egfr";
 }
 
 Object.entries(els.studyButtons).forEach(([key, btn]) => {
@@ -189,7 +201,7 @@ function syncHintTitles() {
 async function refreshSession() {
   try {
     const info = await window.pywebview.api.describe_session(
-      state.mappingCsv, state.outputDir, state.studyOverride || "egfr");
+      state.mappingCsv, state.outputDir, effectiveStudy());
     if (info && info.success !== false) { renderSession(info); syncHintTitles(); }
   } catch (err) {
     console.error("describe_session failed", err);
@@ -311,11 +323,29 @@ async function runProcess(paths, isFolder) {
   els.previewGrid.classList.add("hidden");
   [els.resetBtn, els.revealBtn, els.approveBtn].forEach((b) => b && (b.disabled = true));
 
+  // Settle which study this is BEFORE anything is written, and repaint the
+  // session panel, so the mapping CSV and output paths on screen are the
+  // ones about to be used. The engine reaches the same answer either way;
+  // asking first is only so the operator is not shown the wrong study's
+  // filenames while the run they cannot cancel is under way.
+  try {
+    const detected = await window.pywebview.api.detect_study(paths, isFolder);
+    if (detected?.success && detected.study) {
+      state.detectedStudy = detected.study;
+      await refreshSession();
+    }
+  } catch (err) {
+    console.error("detect_study failed", err); // never block the run over a label
+  }
+
   try {
     const result = await window.pywebview.api.process_package(
       paths, isFolder, state.studyOverride || null, state.mappingCsv, state.outputDir);
     state.lastResult = result;
+    // The result is authoritative -- it reports the study actually used.
+    if (result?.study) state.detectedStudy = result.study;
     renderResult(result);
+    refreshSession();
   } catch (err) {
     renderResult({ success: false, errors: [`Unexpected error: ${err}`] });
   } finally {
@@ -780,6 +810,9 @@ els.approveBtn?.addEventListener("click", () => {
 
 els.resetBtn?.addEventListener("click", () => {
   state.lastResult = null;
+  // Nothing is selected any more, so nothing has been detected either.
+  state.detectedStudy = null;
+  refreshSession();
   ccState = { tab: "images", manifest: null, subject: "", observer: null };
   els.batchResults.classList.add("hidden");
   els.batchTbody.innerHTML = "";
