@@ -35,6 +35,18 @@ DICOM_DECODER_HIDDENIMPORTS = [
     'libjpeg',
     'PIL',
     'PIL.Image',
+    # numpy is imported by pydicom LAZILY, from inside pixel-data conversion
+    # -- nothing in this app or the three engine scripts ever writes
+    # `import numpy`, so PyInstaller's static analysis cannot see it and the
+    # packaged app failed every image with "NumPy is required when
+    # converting pixel data to an ndarray" while source runs worked fine.
+    'numpy',
+    # pydicom selects its decoder plugin module by name at decode time, same
+    # dynamic-import problem one level up.
+    'pydicom.pixels',
+    'pydicom.pixels.decoders',
+    'pydicom.pixels.decoders.pylibjpeg',
+    'pydicom.pixels.decoders.pillow',
 ]
 DICOM_DECODER_METADATA = (
     copy_metadata('pylibjpeg')

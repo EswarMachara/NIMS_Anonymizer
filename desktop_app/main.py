@@ -219,7 +219,75 @@ def _setup_drag_and_drop(window: "webview.Window"):
     tile.on("drop", DOMEventHandler(on_drop, prevent_default=True, stop_propagation=True))
 
 
+def self_test() -> int:
+    """
+    Verify that this build can actually do its job, and exit non-zero if it
+    cannot. Run by CI against the BUILT .exe (`--self-test`).
+
+    This exists because every packaging bug in this app so far has been the
+    same shape: a dependency that pydicom imports dynamically, which
+    PyInstaller's static analysis cannot see, so it is missing from the
+    bundle while running from source works perfectly. Checking the build
+    ENVIRONMENT catches none of that -- the environment always has
+    everything. Only the frozen app can answer whether the frozen app
+    works.
+
+    Two failures already shipped this way and were found by a human running
+    the exe: no JPEG decoder plugin (every ultrasound image failed), then
+    numpy missing (same, one layer down). Both are asserted here.
+
+    Deliberately does not touch patient data: it proves the decode PATH is
+    wired up, not that any particular file redacts correctly.
+    """
+    problems = []
+
+    try:
+        import numpy
+        print(f"numpy: OK ({numpy.__version__})")
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"numpy is not importable in this build: {exc}")
+
+    try:
+        from pydicom.pixels import get_decoder
+        from pydicom.uid import JPEGBaseline8Bit
+
+        plugins = get_decoder(JPEGBaseline8Bit).available_plugins
+        print(f"JPEG Baseline decoder plugins: {plugins}")
+        if not plugins:
+            problems.append(
+                "no JPEG Baseline decoder plugin is available -- every ultrasound "
+                "image would silently fail to anonymize"
+            )
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"pydicom pixel decoding is unavailable in this build: {exc}")
+
+    try:
+        import fitz  # PyMuPDF, used for PDF redaction and report previews
+        print("PyMuPDF: OK")
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"PyMuPDF (fitz) is not importable in this build: {exc}")
+
+    for module in ("anon_common", "anonymize_eGFR", "anonymize_KFRE"):
+        try:
+            __import__(module)
+            print(f"{module}: OK")
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"{module} is not importable in this build: {exc}")
+
+    if problems:
+        print("\nSELF-TEST FAILED:")
+        for p in problems:
+            print(f"  - {p}")
+        return 1
+
+    print("\nSELF-TEST PASSED")
+    return 0
+
+
 def main():
+    if "--self-test" in sys.argv[1:]:
+        raise SystemExit(self_test())
+
     try:
         engine.cleanup_stale_staging_dirs()
     except Exception:  # noqa: BLE001 -- best-effort only, never block startup

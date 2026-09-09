@@ -104,24 +104,31 @@ jobs:
           Write-Host "Build OK: $exe ($size bytes)"
           Get-FileHash $exe -Algorithm SHA256 | Format-List
 
-          # The DICOM decoders are pulled in via app.spec hiddenimports /
-          # copy_metadata because pydicom imports them dynamically. Confirm
-          # they actually landed in the bundle -- a build missing them still
-          # runs, and still anonymizes PDFs, but drops every ultrasound image.
-          #
-          # Matched by signature rather than by expected folder layout:
-          # PyInstaller may ship these as a package directory OR as loose C
-          # extensions at the _internal root (_imaging.cp312-win_amd64.pyd,
-          # _libjpeg.cp312-win_amd64.pyd), and asserting one specific layout
-          # would fail the build for a bundle that is actually fine.
-          $internal = "dist/TANUH-Renal-Anonymizer/_internal"
-          $names = @(Get-ChildItem $internal -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
-          $pilHits = @($names | Where-Object { $_ -match "^PIL$|_imaging" }).Count
-          $ljHits  = @($names | Where-Object { $_ -match "libjpeg|^pylibjpeg$" }).Count
-          Write-Host "bundled decoder evidence -> pillow: $pilHits match(es) | pylibjpeg: $ljHits match(es)"
-          if ($pilHits -eq 0 -and $ljHits -eq 0) {
-            throw "No DICOM JPEG decoder was bundled into the build -- every ultrasound image would silently fail to anonymize"
+      - name: Self-test the BUILT executable
+        # The check that actually matters. Every packaging bug in this app
+        # has been a dependency pydicom imports dynamically, invisible to
+        # PyInstaller's static analysis: missing from the bundle while
+        # source runs work perfectly. Two such bugs shipped and were caught
+        # by a human running the exe -- no decoder plugin, then no numpy --
+        # because CI only ever checked the build ENVIRONMENT, which always
+        # has everything, and then guessed at file layout inside _internal.
+        #
+        # Running the frozen app against itself is the only check that can
+        # answer whether the frozen app works. See main.py's self_test().
+        working-directory: desktop_app/build
+        shell: pwsh
+        run: |
+          $exe = "dist/TANUH-Renal-Anonymizer/TANUH-Renal-Anonymizer.exe"
+          # console=False in app.spec, so the app has no stdout attached to
+          # this shell -- the exit code is the contract, and self_test()
+          # prints its detail into the app's own console buffer.
+          & $exe --self-test
+          $code = $LASTEXITCODE
+          Write-Host "self-test exit code: $code"
+          if ($code -ne 0) {
+            throw "The built executable failed its own self-test (exit $code) -- it would ship unable to anonymize ultrasound images. See main.py self_test()."
           }
+          Write-Host "Built executable passed its self-test."
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

@@ -183,22 +183,46 @@ def _immediate_subfolders(package_dir: str) -> List[str]:
         return []
 
 
-def _only_written_pairs(pairs: List[Dict[str, str]]) -> List[Dict[str, str]]:
+def _only_written_pairs(
+    pairs: List[Dict[str, str]],
+    written_after: Optional[float] = None,
+) -> List[Dict[str, str]]:
     """
-    Drop preview rows whose anonymized output was not actually written.
+    Drop preview rows whose anonymized output this run did not actually write.
 
     Both studies' preview builders RECOMPUTE each expected output path from
     the same pure naming functions the writers use, rather than observing
     what landed on disk -- which is what keeps them correct when some files
     fail. The cost is that a failed file still yields a plausible-looking
-    row: before the DICOM decoder plugins were added to requirements.txt,
-    a package could report all 10 ultrasound images as anonymized output
-    while zero were on disk. The operator is being asked to eyeball this
-    list and then Approve, so a row here must mean a real file -- the
-    failures are reported through `errors` / `failed_pdfs` instead.
-    Called after the writers have run, so existence is settled by now.
+    row, and the operator is being asked to eyeball this list and then
+    Approve, so a row here must mean a real file.
+
+    Existence alone is NOT sufficient, and assuming it was a bug: output
+    accumulates permanently per patient under Anonymized_<study>/<AnonID>/,
+    so a patient processed successfully once leaves files behind that make
+    a LATER failed run look successful -- observed exactly that, a run
+    reporting 13 files while writing 0 images, because a previous run's
+    images were still sitting at the same paths. `written_after` (captured
+    immediately before the writers run) distinguishes "written now" from
+    "left over from last time".
+
+    The one-second slack absorbs coarse filesystem mtime granularity; being
+    slightly permissive here is the safe direction, since the alternative
+    is hiding a file that genuinely was just written.
     """
-    return [p for p in pairs if p.get("output") and os.path.exists(p["output"])]
+    kept = []
+    for p in pairs:
+        output = p.get("output")
+        if not output or not os.path.exists(output):
+            continue
+        if written_after is not None:
+            try:
+                if os.path.getmtime(output) < written_after - 1.0:
+                    continue  # a previous run's leftover, not this run's output
+            except OSError:
+                continue
+        kept.append(p)
+    return kept
 
 
 def _distinct_identity_values(rec: "eg.PatientRecord") -> tuple:
@@ -321,6 +345,10 @@ def process_egfr_package(package_dir: str) -> Dict[str, Any]:
             "log": log,
         }
 
+    # Captured before the writers run so the preview can tell this run's
+    # output apart from a previous run's leftovers at the same paths (this
+    # patient's folder persists across runs) -- see _only_written_pairs().
+    write_started = time.time()
     eg.write_patient_outputs(rec, output_root)
     mapping.save()
 
@@ -336,7 +364,9 @@ def process_egfr_package(package_dir: str) -> Dict[str, Any]:
         "dcm_count": rec.dcm_count,
         "failed_pdfs": [{"path": p, "reason": r} for p, r in rec.failed_pdfs],
         "errors": rec.errors,
-        "preview_pairs": _only_written_pairs(_build_egfr_preview_pairs(rec, out_patient_dir)),
+        "preview_pairs": _only_written_pairs(
+            _build_egfr_preview_pairs(rec, out_patient_dir), write_started
+        ),
         "log": log,
     }
 
@@ -386,6 +416,7 @@ def process_kfre_package(package_dir: str) -> Dict[str, Any]:
     anon_id, is_new = mapping.get_or_assign(original_key=group.identity_key, name=group.patient_name)
 
     os.makedirs(output_root, exist_ok=True)
+    write_started = time.time()  # see _only_written_pairs()
     exit_code = kf._run_redaction_and_save([group], mapping, output_root)  # also calls mapping.save()
 
     pairs: List[Dict[str, str]] = []
@@ -413,7 +444,7 @@ def process_kfre_package(package_dir: str) -> Dict[str, Any]:
         "output_dir": output_root,
         "mapping_csv_path": mapping_csv_path,
         "errors": errors,
-        "preview_pairs": _only_written_pairs(pairs),
+        "preview_pairs": _only_written_pairs(pairs, write_started),
     }
 
 
@@ -759,6 +790,7 @@ def process_kfre_batch(parent_dir: str) -> Dict[str, Any]:
         assigned.append((group, anon_id, is_new))
 
     os.makedirs(output_root, exist_ok=True)
+    write_started = time.time()  # see _only_written_pairs()
     exit_code = kf._run_redaction_and_save(groups, mapping, output_root)  # also calls mapping.save()
 
     # Scanned/no-PII files carry no identity, so they cannot be attributed to
@@ -780,7 +812,7 @@ def process_kfre_batch(parent_dir: str) -> Dict[str, Any]:
             "output": os.path.join(output_root, f"{anon_id}_{rec.filename}"),
             "category": "Clinical / lab report",
         } for rec in group.files]
-        written = _only_written_pairs(pairs)
+        written = _only_written_pairs(pairs, write_started)
         patients.append({
             "success": exit_code == 0 and len(written) == len(pairs),
             "study": "kfre",
