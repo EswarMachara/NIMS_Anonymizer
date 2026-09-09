@@ -49,6 +49,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Verify DICOM JPEG decoders are available
+        # Regression guard. NIMS's ultrasound DICOMs are JPEG Baseline
+        # (Process 1); with no decoder plugin installed, pydicom fails every
+        # single one and the app writes the report PDFs but ZERO images --
+        # silently, since nothing crashes. Fail the build here instead.
+        working-directory: desktop_app
+        run: >
+          python -c "from pydicom.pixels import get_decoder;
+          from pydicom.uid import JPEGBaseline8Bit;
+          p = get_decoder(JPEGBaseline8Bit).available_plugins;
+          print('JPEG Baseline decoder plugins:', p);
+          raise SystemExit('NO DICOM JPEG DECODER AVAILABLE -- every ultrasound image would silently fail to anonymize') if not p else None"
+
       - name: Sanity-check the backend imports cleanly
         # Exercises the same anon_common / anonymize_eGFR / anonymize_KFRE
         # import path the packaged app relies on (see backend/engine.py),
@@ -78,6 +91,19 @@ jobs:
           }
           Write-Host "Build OK: $exe ($size bytes)"
           Get-FileHash $exe -Algorithm SHA256 | Format-List
+
+          # The DICOM decoders are pulled in via app.spec hiddenimports /
+          # copy_metadata because pydicom imports them dynamically. Confirm
+          # they actually landed in the bundle -- a build missing them still
+          # runs, and still anonymizes PDFs, but drops every ultrasound image.
+          $internal = "dist/TANUH-Renal-Anonymizer/_internal"
+          $pil      = Test-Path "$internal/PIL"
+          $libjpeg  = @(Get-ChildItem $internal -Recurse -Filter "*libjpeg*" -ErrorAction SilentlyContinue).Count
+          $pylj     = Test-Path "$internal/pylibjpeg"
+          Write-Host "bundled decoders -> PIL: $pil | pylibjpeg: $pylj | libjpeg files: $libjpeg"
+          if (-not $pil -and -not $pylj) {
+            throw "No DICOM JPEG decoder was bundled into the build -- ultrasound images would silently fail to anonymize"
+          }
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

@@ -8,6 +8,23 @@ pydicom==3.0.2
 pymupdf==1.28.2
 numpy>=1.26          # pydicom's own pixel_array dependency; pulled in transitively but pinned loosely here for clarity
 
+# DICOM pixel-data decoders. NOT optional: pydicom itself cannot decompress
+# compressed pixel data, and NIMS's ultrasound DICOMs are all JPEG Baseline
+# (Process 1) (transfer syntax 1.2.840.10008.1.2.4.50 -- verified across the
+# whole sample corpus). Without a decoder plugin installed, EVERY DICOM fails
+# with "Unable to decompress ... plugins ... are all missing dependencies"
+# and the app silently writes the report PDFs but ZERO ultrasound images.
+# Two plugins are declared deliberately: pylibjpeg-libjpeg covers the whole
+# JPEG family (baseline/extended/lossless), so a scanner or firmware change
+# emitting a different JPEG variant won't silently drop images again, and
+# pillow is a cheap second decoder pydicom can fall back to.
+# NOTE: pydicom imports these dynamically by name, so PyInstaller cannot see
+# them by static analysis -- they are also listed in build/app.spec's
+# `hiddenimports`. Changing them here means changing them there too.
+pylibjpeg>=2.0
+pylibjpeg-libjpeg>=2.1
+pillow>=10.0
+
 # Windows-only packaging tool -- not needed to just RUN the app with
 # `python3 main.py`, only to build the standalone .exe (see build/WINDOWS_BUILD.md).
 pyinstaller==6.11.1 ; sys_platform == "win32"

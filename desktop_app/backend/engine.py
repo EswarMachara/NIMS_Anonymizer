@@ -166,6 +166,92 @@ def stage_selected_files(file_paths: List[str]) -> str:
 
 
 # ==========================================================================
+# Selection-mistake reporting
+# ==========================================================================
+
+
+def _immediate_subfolders(package_dir: str) -> List[str]:
+    """Names of the selected folder's immediate subdirectories. Used only to
+    tell the operator what they could have picked instead, once we already
+    KNOW the selection held more than one patient."""
+    try:
+        return sorted(
+            name for name in os.listdir(package_dir)
+            if os.path.isdir(os.path.join(package_dir, name))
+        )
+    except OSError:
+        return []
+
+
+def _only_written_pairs(pairs: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """
+    Drop preview rows whose anonymized output was not actually written.
+
+    Both studies' preview builders RECOMPUTE each expected output path from
+    the same pure naming functions the writers use, rather than observing
+    what landed on disk -- which is what keeps them correct when some files
+    fail. The cost is that a failed file still yields a plausible-looking
+    row: before the DICOM decoder plugins were added to requirements.txt,
+    a package could report all 10 ultrasound images as anonymized output
+    while zero were on disk. The operator is being asked to eyeball this
+    list and then Approve, so a row here must mean a real file -- the
+    failures are reported through `errors` / `failed_pdfs` instead.
+    Called after the writers have run, so existence is settled by now.
+    """
+    return [p for p in pairs if p.get("output") and os.path.exists(p["output"])]
+
+
+def _distinct_identity_values(rec: "eg.PatientRecord") -> tuple:
+    """(kind, {values}) re-derived from the PDF fields resolve_patient_
+    identity() already parsed -- mirrors its own derivation (see
+    anonymize_eGFR.py's identity-key block) rather than string-matching its
+    error prose, so this stays correct if that wording ever changes."""
+    cr_nos = {f.cr_no for _, f in rec.a_results if f.cr_no}
+    if cr_nos:
+        return ("CR No", cr_nos)
+    lab_nos = {f.lab_no for _, f in rec.b_results if f.lab_no}
+    if lab_nos:
+        return ("Lab No.", lab_nos)
+    return (None, set())
+
+
+def _multi_patient_errors(package_dir: str, kind: str, values: set) -> List[str]:
+    """
+    Operator-facing explanation of the single most likely selection mistake:
+    pointing the app at a folder holding MANY patients (the batch CLI's
+    corpus layout, e.g. eGFR/NP1 (CKD)/, NP2 (CKD)/, ...) instead of one
+    patient's package.
+
+    The engines' own message for this ("CONFLICTING CR No values across
+    report PDFs: {...} -- refusing to guess") is written for someone running
+    the batch CLI and reading a terminal; it tells a clinical user nothing
+    about what to do differently. This replaces it, and demotes the raw
+    values to a trailing detail line instead of leading with them.
+    """
+    # Deliberately NOT phrased as "holds N patients": len(values) counts the
+    # distinct keys of ONE template family, so a mixed corpus (e.g. CKD
+    # patients keyed by CR No alongside Normal-cohort ones keyed by Lab No.)
+    # would understate the real patient count. "More than one" is the part
+    # that is always true and is all the operator needs to act.
+    errors = [
+        "This folder contains reports from more than one patient "
+        f"({len(values)} distinct {kind} values were found in it), so it was not "
+        "processed. This app anonymizes ONE patient's package at a time -- nothing "
+        "was written, and no patient data was mixed together."
+    ]
+    subfolders = _immediate_subfolders(package_dir)
+    if subfolders:
+        shown = ", ".join(subfolders[:6]) + (", ..." if len(subfolders) > 6 else "")
+        errors.append(
+            "It looks like each patient has their own subfolder here -- select ONE of "
+            f'those instead of the folder above (for example "{subfolders[0]}"). '
+            f"Subfolders found: {shown}"
+        )
+    errors.append(f"Distinct {kind} values seen: {', '.join(sorted(values))}")
+    return errors
+
+
+# ==========================================================================
 # eGFR processing
 # ==========================================================================
 
@@ -215,13 +301,23 @@ def process_egfr_package(package_dir: str) -> Dict[str, Any]:
 
     rec = eg.resolve_patient_identity(package_dir, mapping, log)
     if rec.identity_key is None:
+        # Distinguish the most common selection mistake (a folder holding
+        # MANY patients) from every other identity-resolution failure, and
+        # explain it in terms the operator can act on. The engine's own
+        # errors are kept in `log` either way, so nothing is lost.
+        kind, values = _distinct_identity_values(rec)
+        if len(values) > 1:
+            errors = _multi_patient_errors(package_dir, kind, values)
+            log.extend(rec.errors)
+        else:
+            errors = rec.errors or [
+                "Could not establish a stable identity key (CR No / Lab No.) for this package. "
+                "Make sure it contains at least one readable clinical-report PDF."
+            ]
         return {
             "success": False,
             "study": "egfr",
-            "errors": rec.errors or [
-                "Could not establish a stable identity key (CR No / Lab No.) for this package. "
-                "Make sure it contains at least one readable clinical-report PDF."
-            ],
+            "errors": errors,
             "log": log,
         }
 
@@ -240,7 +336,7 @@ def process_egfr_package(package_dir: str) -> Dict[str, Any]:
         "dcm_count": rec.dcm_count,
         "failed_pdfs": [{"path": p, "reason": r} for p, r in rec.failed_pdfs],
         "errors": rec.errors,
-        "preview_pairs": _build_egfr_preview_pairs(rec, out_patient_dir),
+        "preview_pairs": _only_written_pairs(_build_egfr_preview_pairs(rec, out_patient_dir)),
         "log": log,
     }
 
@@ -274,14 +370,15 @@ def process_kfre_package(package_dir: str) -> Dict[str, Any]:
         return {"success": False, "study": "kfre", "errors": errors}
 
     if len(groups) > 1:
-        keys = ", ".join(f"{g.identity_key_kind}:{g.identity_key}" for g in groups)
+        # Same selection mistake as the eGFR path guards against (a folder
+        # of many patients rather than one patient's package) -- reported
+        # with the same wording so both studies behave identically.
+        kinds = {g.identity_key_kind for g in groups}
+        kind = next(iter(kinds)) if len(kinds) == 1 else "CR No / Lab No."
         return {
             "success": False,
             "study": "kfre",
-            "errors": [
-                f"This package contains {len(groups)} different identity keys ({keys}) -- "
-                "expected exactly one patient per package. Select a single patient's files/folder."
-            ],
+            "errors": _multi_patient_errors(package_dir, kind, {g.identity_key for g in groups}),
         }
 
     mapping = ac.MappingStore.load_or_create(mapping_csv_path)
@@ -316,7 +413,7 @@ def process_kfre_package(package_dir: str) -> Dict[str, Any]:
         "output_dir": output_root,
         "mapping_csv_path": mapping_csv_path,
         "errors": errors,
-        "preview_pairs": pairs,
+        "preview_pairs": _only_written_pairs(pairs),
     }
 
 

@@ -13,7 +13,34 @@
 
 import sys
 
+from PyInstaller.utils.hooks import copy_metadata
+
 block_cipher = None
+
+# pydicom loads its pixel-data decoder plugins by importing them DYNAMICALLY
+# by name at decode time, so PyInstaller's static analysis never sees them and
+# would ship a build that silently anonymizes the report PDFs while writing
+# ZERO ultrasound images (every .dcm failing with "Unable to decompress ...
+# plugins ... are all missing dependencies"). They must therefore be forced in
+# by hand -- see the decoder block in ../requirements.txt.
+#
+# pylibjpeg additionally finds its own codec (the `libjpeg` module) through
+# setuptools entry points, which PyInstaller does not preserve unless the
+# package metadata is bundled too -- hence copy_metadata() for both. `pillow`
+# (imported as PIL) is a deliberate second decoder: it bundles very reliably
+# and covers JPEG Baseline on its own, so it still works even if pylibjpeg's
+# entry-point discovery fails inside the frozen app.
+DICOM_DECODER_HIDDENIMPORTS = [
+    'pylibjpeg',
+    'libjpeg',
+    'PIL',
+    'PIL.Image',
+]
+DICOM_DECODER_METADATA = (
+    copy_metadata('pylibjpeg')
+    + copy_metadata('pylibjpeg-libjpeg')
+    + copy_metadata('pillow')
+)
 
 # anon_common.py / anonymize_eGFR.py / anonymize_KFRE.py live one level
 # above desktop_app/ (project root) and are imported via a plain
@@ -29,13 +56,13 @@ a = Analysis(
     binaries=[],
     datas=[
         ('../web', 'web'),
-    ],
+    ] + DICOM_DECODER_METADATA,
     hiddenimports=[
         'anon_common',
         'anonymize_eGFR',
         'anonymize_KFRE',
         'backend.engine',
-    ],
+    ] + DICOM_DECODER_HIDDENIMPORTS,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
