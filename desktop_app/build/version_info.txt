@@ -1,0 +1,39 @@
+# version_info.txt -- Windows version-resource metadata for the built .exe.
+#
+# PyInstaller embeds this as the exe's VS_VERSION_INFO resource (the data
+# shown on the file's Properties > Details tab in Windows Explorer, and one
+# of the signals AV/EDR heuristics weigh when deciding whether an unsigned
+# binary "looks like" a legitimate app vs. an anonymous dropper). Referenced
+# from app.spec's EXE(..., version='version_info.txt').
+#
+# Bump `filevers`/`prodvers`/FileVersion/ProductVersion together when the
+# app's version changes; keep the four-part numeric form Windows expects
+# (major, minor, patch, build).
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,       # VOS_NT_WINDOWS32
+    fileType=0x1,     # VFT_APP
+    subtype=0x0,
+    date=(0, 0)
+    ),
+  kids=[
+    StringFileInfo(
+      [
+      StringTable(
+        u'040904B0',
+        [StringStruct(u'CompanyName', u'TANUH — The AI CoE in Healthcare (NIMS)'),
+        StringStruct(u'FileDescription', u'TANUH Renal Anonymizer — offline eGFR/KFRE PII anonymization tool'),
+        StringStruct(u'FileVersion', u'1.0.0.0'),
+        StringStruct(u'InternalName', u'TANUH-Renal-Anonymizer'),
+        StringStruct(u'LegalCopyright', u'© 2026 TANUH / Nizam’s Institute of Medical Sciences (NIMS). Internal use only.'),
+        StringStruct(u'OriginalFilename', u'TANUH-Renal-Anonymizer.exe'),
+        StringStruct(u'ProductName', u'TANUH Renal Anonymizer'),
+        StringStruct(u'ProductVersion', u'1.0.0.0')])
+      ]),
+    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+  ]
+)

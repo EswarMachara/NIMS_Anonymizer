@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TANUH Renal Anonymizer</title>
+  <link rel="icon" href="assets/tanuh.png" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <header class="anon-topbar">
+    <a class="brand" href="#" aria-label="TANUH Renal Anonymizer, personalized for NIMS">
+      <div class="brand-logos">
+        <img src="assets/tanuh.png" alt="TANUH" />
+        <div class="brand-divider"></div>
+        <img src="assets/nims-logo.webp" alt="Nizam's Institute of Medical Sciences (NIMS)" />
+      </div>
+      <span>
+        <strong>Renal Anonymizer</strong>
+        <small>TANUH · The AI CoE in Healthcare</small>
+      </span>
+    </a>
+    <div class="anon-topbar-actions">
+      <span class="hospital-chip" id="hospital-chip">Nizam's Institute of Medical Sciences (NIMS)</span>
+    </div>
+  </header>
+
+  <main class="anon-workbench">
+    <section class="anon-hero-panel">
+      <div>
+        <span class="eyebrow">PII removal workflow · Runs fully offline</span>
+        <h1>Renal Study Anonymizer</h1>
+        <p>Select one patient's eGFR or KFRE package, review the original files against the
+          anonymized output side by side, then approve the result. Nothing leaves this computer.</p>
+      </div>
+      <div class="anon-hero-steps" aria-label="Anonymization workflow">
+        <div id="step-1" class="step-active"><span>1</span><strong>Select package</strong><small>Folder, files, or drag &amp; drop</small></div>
+        <div id="step-2"><span>2</span><strong>Preview output</strong><small>Original vs. anonymized</small></div>
+        <div id="step-3"><span>3</span><strong>Approve</strong><small>Keep the anonymized package</small></div>
+      </div>
+    </section>
+
+    <section class="anon-layout">
+      <article class="panel-card anon-intro-card">
+        <div class="anon-card-head">
+          <span class="eyebrow">Expected input</span>
+          <h2>One patient package at a time</h2>
+          <p>Any of these layouts work — files are classified by content, not by folder name.</p>
+        </div>
+        <div class="anon-folder-tree" aria-label="Expected folder structure">
+          <div><strong>Patient_Folder/</strong></div>
+          <div><span>├─</span> Left_Kidney_Images/ <small>DICOM (eGFR only)</small></div>
+          <div><span>├─</span> Right_Kidney_Images/ <small>DICOM (eGFR only)</small></div>
+          <div><span>├─</span> Ultrasound_Reports/ <small>PDF</small></div>
+          <div><span>└─</span> Lab_Reports/ <small>PDF (KFRE: PDFs only, no images)</small></div>
+        </div>
+        <div class="anon-policy-grid">
+          <div>
+            <strong>Study auto-detected</strong>
+            <p>DICOM images present → eGFR pipeline. PDF-only → KFRE pipeline. Override below if needed.</p>
+          </div>
+          <div>
+            <strong>Follow-up aware</strong>
+            <p>The same patient (matched by CR No / Lab No.) always gets the same Anonymized ID across visits.</p>
+          </div>
+          <div>
+            <strong>Human approval gate</strong>
+            <p>Review the original vs. anonymized preview before the output is kept.</p>
+          </div>
+        </div>
+        <div class="study-toggle" role="group" aria-label="Study type override">
+          <button type="button" class="active" id="study-auto" data-study="">Auto-detect</button>
+          <button type="button" id="study-egfr" data-study="egfr">eGFR</button>
+          <button type="button" id="study-kfre" data-study="kfre">KFRE</button>
+        </div>
+        <p class="study-toggle-note" id="study-detected-note">&nbsp;</p>
+      </article>
+
+      <article class="panel-card anon-tool-card">
+        <div class="anon-card-head">
+          <h2>Select &amp; anonymize</h2>
+          <p>Choose a folder, choose individual files, or drag them in below.</p>
+        </div>
+
+        <div class="upload-grid">
+          <div class="upload-tile wide" id="package-tile">
+            <span class="upload-title">DROP PATIENT PACKAGE HERE</span>
+            <span class="upload-subtitle">Or use one of the buttons below</span>
+            <div class="upload-guidance">
+              <span><strong>Tip:</strong> "Choose Folder" is the most reliable option — it captures the whole
+                patient package (images + reports) in one action.</span>
+            </div>
+            <div class="package-upload-actions">
+              <button type="button" class="package-upload-action" id="choose-folder-btn">Choose Folder</button>
+              <button type="button" class="package-upload-action" id="choose-files-btn">Choose Files</button>
+            </div>
+            <div class="anon-status-card" id="status-card">No package selected</div>
+          </div>
+        </div>
+
+        <div class="result-banner hidden" id="result-banner"></div>
+
+        <div class="anon-preview-grid hidden" id="preview-grid">
+          <section class="anon-preview-panel" aria-labelledby="original-title">
+            <h3 id="original-title">Original</h3>
+            <p>Source files, unchanged on disk.</p>
+            <div class="anon-file-list" id="original-list"></div>
+          </section>
+          <section class="anon-preview-panel" aria-labelledby="output-title">
+            <h3 id="output-title">Anonymized output</h3>
+            <p>Written to the app's private output folder — see below.</p>
+            <div class="anon-file-list" id="output-list"></div>
+          </section>
+        </div>
+
+        <div class="anon-actions">
+          <button class="btn-secondary" id="reset-btn" type="button" disabled>Clear</button>
+          <span class="spacer"></span>
+          <button class="btn-secondary" id="reveal-btn" type="button" disabled>Show output folder</button>
+          <button class="btn-premium" id="approve-btn" type="button" disabled>Approve</button>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <strong>Where things are kept:</strong> the anonymized output and the confidential ID-mapping file
+    never leave this computer. Mapping file (access-restricted — this is the only file that still links an
+    Anonymized ID to a real patient): <code id="footer-mapping-path" title="Click to open containing folder">…</code>
+    · Output folder: <code id="footer-output-path" title="Click to open containing folder">…</code>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,17 @@
+# TANUH Renal Anonymizer -- desktop app dependencies.
+# Versions pinned to what this app was built and tested against in this
+# session; newer patch versions of these should be safe, but re-test the
+# full "python3 main.py" flow against real sample data after any upgrade.
+
+pywebview==6.2.1
+pydicom==3.0.2
+pymupdf==1.28.2
+numpy>=1.26          # pydicom's own pixel_array dependency; pulled in transitively but pinned loosely here for clarity
+
+# Windows-only packaging tool -- not needed to just RUN the app with
+# `python3 main.py`, only to build the standalone .exe (see build/WINDOWS_BUILD.md).
+pyinstaller==6.11.1 ; sys_platform == "win32"
+
+# pywebview's Windows backend (Microsoft Edge WebView2) needs pythonnet to
+# bridge into the .NET WebView2 control -- required on Windows only.
+pythonnet==3.0.5 ; sys_platform == "win32"

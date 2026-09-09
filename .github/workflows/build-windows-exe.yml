@@ -1,0 +1,111 @@
+name: Build Windows desktop app
+
+# Builds the TANUH Renal Anonymizer .exe on a clean, GitHub-hosted Windows
+# runner -- see desktop_app/build/WINDOWS_BUILD.md for the manual equivalent
+# of every step below, and desktop_app/build/IT_SECURITY_REVIEW_BRIEF.md for
+# why an unsigned build like this one may still need an antivirus/EDR
+# allow-list on the machines it's installed on (a clean CI build doesn't
+# change that -- code-signing or an IT allow-list still does).
+"on":
+  push:
+    branches: [main]
+    paths:
+      - "desktop_app/**"
+      - "anon_common.py"
+      - "anonymize_eGFR.py"
+      - "anonymize_KFRE.py"
+      - ".github/workflows/build-windows-exe.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "desktop_app/**"
+      - "anon_common.py"
+      - "anonymize_eGFR.py"
+      - "anonymize_KFRE.py"
+  workflow_dispatch: {} # manual "Run workflow" button in the Actions tab
+  release:
+    types: [published] # publishing a GitHub Release also attaches the build to it
+
+permissions:
+  contents: write # only the attach-to-release job needs this, for `gh release upload`
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: desktop_app/requirements.txt
+
+      - name: Install dependencies
+        working-directory: desktop_app
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Sanity-check the backend imports cleanly
+        # Exercises the same anon_common / anonymize_eGFR / anonymize_KFRE
+        # import path the packaged app relies on (see backend/engine.py),
+        # without creating a GUI window -- a hosted runner has no
+        # interactive desktop session to reliably show one, so main.py
+        # itself is intentionally not launched here. This is the automated
+        # equivalent of WINDOWS_BUILD.md step 3's "run it from source
+        # first" check, scoped to what CI can actually verify.
+        working-directory: desktop_app
+        run: python -c "from backend import engine; print(engine.get_app_info())"
+
+      - name: Build Windows executable
+        working-directory: desktop_app/build
+        run: pyinstaller --clean -y app.spec
+
+      - name: Verify build output
+        working-directory: desktop_app/build
+        shell: pwsh
+        run: |
+          $exe = "dist/TANUH-Renal-Anonymizer/TANUH-Renal-Anonymizer.exe"
+          if (-not (Test-Path $exe)) {
+            throw "Build did not produce the expected exe at $exe"
+          }
+          $size = (Get-Item $exe).Length
+          if ($size -lt 1MB) {
+            throw "Built exe is suspiciously small ($size bytes) -- likely a broken build"
+          }
+          Write-Host "Build OK: $exe ($size bytes)"
+          Get-FileHash $exe -Algorithm SHA256 | Format-List
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TANUH-Renal-Anonymizer-windows
+          path: desktop_app/build/dist/TANUH-Renal-Anonymizer/
+          retention-days: 30
+          if-no-files-found: error
+
+  attach-to-release:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: windows-latest
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: TANUH-Renal-Anonymizer-windows
+          path: TANUH-Renal-Anonymizer
+
+      - name: Zip the build for distribution
+        # Distribute the whole folder, not just the .exe -- this is a
+        # --onedir build, the exe needs its sibling _internal/ folder.
+        shell: pwsh
+        run: Compress-Archive -Path TANUH-Renal-Anonymizer -DestinationPath TANUH-Renal-Anonymizer-windows.zip
+
+      - name: Attach zip to the GitHub Release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.event.release.tag_name }}" TANUH-Renal-Anonymizer-windows.zip --clobber
