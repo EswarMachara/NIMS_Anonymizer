@@ -97,26 +97,46 @@ def get_app_data_dir() -> str:
     return path
 
 
-def get_mapping_csv_path(study: str) -> str:
-    """study is 'egfr' or 'kfre' -- mirrors the CLI scripts' own default
-    naming (eGFR_anony_Mapping.csv / KFRE_anony_Mapping.csv), just rooted
-    in the app-data directory instead of the script's own folder."""
+def get_mapping_csv_path(study: str, override: Optional[str] = None) -> str:
+    """
+    Where this run's confidential ID-mapping CSV lives.
+
+    `override` is the operator's explicitly chosen file and wins when given.
+    That matters for more than convenience: the mapping is the ONLY thing
+    that makes a follow-up visit resolve to the patient's existing
+    Anonymized ID, and it is also the list of IDs already issued that a
+    newly minted one is checked against. Running against the wrong file
+    silently issues a second ID for a patient who already has one, so the
+    operator gets to name it rather than having it implied.
+
+    Falls back to the per-user app-data copy, named as the CLI scripts name
+    theirs (eGFR_anony_Mapping.csv / KFRE_anony_Mapping.csv), which is the
+    right default for a single workstation used by one team.
+    """
+    if override:
+        return os.path.abspath(override)
     name = "eGFR_anony_Mapping.csv" if study == "egfr" else "KFRE_anony_Mapping.csv"
     return os.path.join(get_app_data_dir(), name)
 
 
-def get_output_root(study: str) -> str:
+def get_output_root(study: str, override: Optional[str] = None) -> str:
     """
-    Persistent, accumulating output location -- unlike the batch CLI (one
-    ranged-numbered folder per whole-corpus run), the desktop app processes
-    one patient at a time, so there is no natural "session range" to name
-    a folder after. Every processed patient just gets its own <AnonID>/
-    subfolder added under here, same as the CLI's own per-patient
-    subfolder convention (see write_patient_outputs() / _run_redaction_
-    and_save()) -- nothing here ever needs pruning or renaming.
+    Where anonymized output is written.
+
+    `override` is the operator's chosen destination and wins when given, so
+    output can go straight to the study drive or share rather than being
+    buried under the user profile. The per-study subfolder name is still
+    appended, so pointing two studies at one destination keeps them apart.
+
+    Otherwise: a persistent, accumulating location under app-data. Unlike
+    the batch CLI (one ranged-numbered folder per whole-corpus run) there is
+    no natural "session range" to name a folder after here, so every patient
+    just gets its own <AnonID>/ subfolder, matching the CLI's own per-patient
+    convention -- nothing ever needs pruning or renaming.
     """
     name = "Anonymized_eGFR" if study == "egfr" else "Anonymized_KFRE"
-    path = os.path.join(get_app_data_dir(), name)
+    base = os.path.abspath(override) if override else get_app_data_dir()
+    path = os.path.join(base, name)
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -330,9 +350,13 @@ def _build_egfr_preview_pairs(rec: "eg.PatientRecord", out_patient_dir: str) -> 
     return pairs
 
 
-def process_egfr_package(package_dir: str) -> Dict[str, Any]:
-    mapping_csv_path = get_mapping_csv_path("egfr")
-    output_root = get_output_root("egfr")
+def process_egfr_package(
+    package_dir: str,
+    mapping_csv: Optional[str] = None,
+    output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    mapping_csv_path = get_mapping_csv_path("egfr", mapping_csv)
+    output_root = get_output_root("egfr", output_dir)
     mapping = ac.MappingStore.load_or_create(mapping_csv_path)
     log: List[str] = []
 
@@ -389,9 +413,13 @@ def process_egfr_package(package_dir: str) -> Dict[str, Any]:
 # ==========================================================================
 
 
-def process_kfre_package(package_dir: str) -> Dict[str, Any]:
-    mapping_csv_path = get_mapping_csv_path("kfre")
-    output_root = get_output_root("kfre")
+def process_kfre_package(
+    package_dir: str,
+    mapping_csv: Optional[str] = None,
+    output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    mapping_csv_path = get_mapping_csv_path("kfre", mapping_csv)
+    output_root = get_output_root("kfre", output_dir)
 
     pdf_paths = ac.find_pdfs_recursive(package_dir)
     if not pdf_paths:
@@ -724,7 +752,11 @@ def _batch_summary(patients: List[Dict[str, Any]]) -> Dict[str, int]:
     }
 
 
-def process_egfr_batch(parent_dir: str) -> Dict[str, Any]:
+def process_egfr_batch(
+    parent_dir: str,
+    mapping_csv: Optional[str] = None,
+    output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Run every patient subfolder under parent_dir through the SAME
     single-patient path, independently: each resolves its own identity and
@@ -737,7 +769,7 @@ def process_egfr_batch(parent_dir: str) -> Dict[str, Any]:
     patients: List[Dict[str, Any]] = []
     for sub in _patient_subfolders(parent_dir):
         try:
-            result = process_egfr_package(sub)
+            result = process_egfr_package(sub, mapping_csv, output_dir)
         except Exception as exc:  # noqa: BLE001 -- one bad folder must not kill the run
             result = {"success": False, "study": "egfr", "errors": [f"Unexpected error: {exc}"]}
         result["source"] = os.path.basename(sub.rstrip(os.sep))
@@ -750,13 +782,17 @@ def process_egfr_batch(parent_dir: str) -> Dict[str, Any]:
         "study": "egfr",
         "patients": patients,
         "summary": _batch_summary(patients),
-        "mapping_csv_path": get_mapping_csv_path("egfr"),
-        "output_dir": get_output_root("egfr"),
+        "mapping_csv_path": get_mapping_csv_path("egfr", mapping_csv),
+        "output_dir": get_output_root("egfr", output_dir),
         "errors": [] if patients else ["No patient subfolders were found in the selected folder."],
     }
 
 
-def process_kfre_batch(parent_dir: str) -> Dict[str, Any]:
+def process_kfre_batch(
+    parent_dir: str,
+    mapping_csv: Optional[str] = None,
+    output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     KFRE needs no subfolder walk: classify_input_file() + group_by_identity()
     already partition every PDF found anywhere under the selection into one
@@ -764,8 +800,8 @@ def process_kfre_batch(parent_dir: str) -> Dict[str, Any]:
     layout -- see anonymize_KFRE.find_input_pdfs()'s own note). So the whole
     selection is processed in one pass and reported one row per group.
     """
-    mapping_csv_path = get_mapping_csv_path("kfre")
-    output_root = get_output_root("kfre")
+    mapping_csv_path = get_mapping_csv_path("kfre", mapping_csv)
+    output_root = get_output_root("kfre", output_dir)
 
     pdf_paths = ac.find_pdfs_recursive(parent_dir)
     if not pdf_paths:
@@ -871,11 +907,22 @@ def process_kfre_batch(parent_dir: str) -> Dict[str, Any]:
 # ==========================================================================
 
 
-def process_package(paths: List[str], is_folder: bool, study_override: Optional[str] = None) -> Dict[str, Any]:
+def process_package(
+    paths: List[str],
+    is_folder: bool,
+    study_override: Optional[str] = None,
+    mapping_csv: Optional[str] = None,
+    output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     paths: a single-element list (folder path, is_folder=True) or a flat
     list of individually-selected file paths (is_folder=False).
     study_override: "egfr" | "kfre" | None (None = auto-detect).
+    mapping_csv: the operator's chosen ID-mapping CSV, or None for the
+        app-data default. Carrying the right one forward is what makes a
+        returning patient resolve to their existing Anonymized ID instead
+        of being issued a second one.
+    output_dir: destination for anonymized output, or None for app-data.
     """
     staging_dir: Optional[str] = None
     try:
@@ -900,10 +947,10 @@ def process_package(paths: List[str], is_folder: bool, study_override: Optional[
         if is_folder:
             if study == "egfr":
                 probe = eg.resolve_patient_identity(package_dir, ac.MappingStore.load_or_create(
-                    get_mapping_csv_path("egfr")), [])
+                    get_mapping_csv_path("egfr", mapping_csv)), [])
                 _kind, values = _distinct_identity_values(probe)
                 if len(values) > 1:
-                    result = process_egfr_batch(package_dir)
+                    result = process_egfr_batch(package_dir, mapping_csv, output_dir)
                     result["study_detected"] = study
                     return result
             else:
@@ -912,19 +959,71 @@ def process_package(paths: List[str], is_folder: bool, study_override: Optional[
                     [r for r in probe_records if r.template in ("A", "B") and r.identity_key is not None]
                 )
                 if len(probe_groups) > 1:
-                    result = process_kfre_batch(package_dir)
+                    result = process_kfre_batch(package_dir, mapping_csv, output_dir)
                     result["study_detected"] = study
                     return result
 
         if study == "egfr":
-            result = process_egfr_package(package_dir)
+            result = process_egfr_package(package_dir, mapping_csv, output_dir)
         else:
-            result = process_kfre_package(package_dir)
+            result = process_kfre_package(package_dir, mapping_csv, output_dir)
         result["study_detected"] = study
         return result
     finally:
         if staging_dir and os.path.isdir(staging_dir):
             shutil.rmtree(staging_dir, ignore_errors=True)
+
+
+def describe_session(
+    mapping_csv: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    study: str = "egfr",
+) -> Dict[str, Any]:
+    """
+    What this run would actually use, and what the mapping file already
+    holds, WITHOUT writing anything.
+
+    Two different situations look identical until you inspect the file, and
+    confusing them is the costly mistake:
+
+      * the file already has rows  -> this is a continuing ID space. A
+        patient whose CR No / Lab No. is in there gets their EXISTING
+        Anonymized ID back (a follow-up visit), and any new ID minted is
+        checked against every ID already in the file.
+      * the file is absent or empty -> a fresh ID space. Nothing to match
+        against, so every patient here is new by definition.
+
+    Reporting the row count up front lets the operator notice that they
+    pointed at an empty file when they meant to continue a populated one,
+    which would otherwise show up much later as duplicate IDs for one
+    patient.
+    """
+    resolved_csv = get_mapping_csv_path(study, mapping_csv)
+    exists = os.path.exists(resolved_csv)
+
+    rows = 0
+    known_ids = 0
+    error = None
+    if exists:
+        try:
+            store = ac.MappingStore.load_or_create(resolved_csv)
+            rows = len(store.rows)
+            known_ids = len({r.get("Anonymized ID", "").strip() for r in store.rows if r.get("Anonymized ID", "").strip()})
+        except Exception as exc:  # noqa: BLE001 -- surfaced, not raised: a bad file is the operator's to fix
+            error = str(exc)
+
+    return {
+        "study": study,
+        "mapping_csv": resolved_csv,
+        "mapping_csv_exists": exists,
+        "mapping_csv_is_default": not bool(mapping_csv),
+        "existing_patients": rows,
+        "existing_ids": known_ids,
+        "continuing": bool(exists and rows),
+        "output_dir": get_output_root(study, output_dir),
+        "output_is_default": not bool(output_dir),
+        "error": error,
+    }
 
 
 def get_app_info() -> Dict[str, Any]:

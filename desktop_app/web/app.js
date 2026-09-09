@@ -23,6 +23,21 @@ const els = {
   chooseFilesBtn: document.getElementById("choose-files-btn"),
   packageTile: document.getElementById("package-tile"),
   progressTrack: document.getElementById("progress-track"),
+  landingStage: document.getElementById("landing-stage"),
+  scrollCue: document.getElementById("scroll-cue"),
+  csvState: document.getElementById("csv-state"),
+  csvHint: document.getElementById("csv-hint"),
+  csvPath: document.getElementById("csv-path"),
+  csvBrowseBtn: document.getElementById("csv-browse-btn"),
+  csvClearBtn: document.getElementById("csv-clear-btn"),
+  csvBox: document.getElementById("csv-box"),
+  outState: document.getElementById("out-state"),
+  outPath: document.getElementById("out-path"),
+  outBrowseBtn: document.getElementById("out-browse-btn"),
+  outClearBtn: document.getElementById("out-clear-btn"),
+  ccProgress: document.getElementById("cc-progress"),
+  ccPrev: document.getElementById("cc-prev"),
+  ccNext: document.getElementById("cc-next"),
   studyButtons: {
     "": document.getElementById("study-auto"),
     egfr: document.getElementById("study-egfr"),
@@ -41,8 +56,6 @@ const els = {
   crosscheckBody: document.getElementById("crosscheck-body"),
   crosscheckTabs: Array.from(document.querySelectorAll("[data-cc-tab]")),
   hospitalChip: document.getElementById("hospital-chip"),
-  footerMappingPath: document.getElementById("footer-mapping-path"),
-  footerOutputPath: document.getElementById("footer-output-path"),
   steps: {
     1: document.getElementById("step-1"),
     2: document.getElementById("step-2"),
@@ -55,6 +68,8 @@ let state = {
   lastResult: null,
   processing: false,
   appDataDir: null, // shared parent of both mapping CSVs + both output folders (see loadAppInfo())
+  mappingCsv: null, // operator-chosen ID-mapping CSV; null = app-data default
+  outputDir: null,  // operator-chosen output destination; null = app-data default
 };
 
 function escapeHTML(value) {
@@ -83,7 +98,99 @@ function setStudyOverride(value) {
 }
 
 Object.entries(els.studyButtons).forEach(([key, btn]) => {
-  btn?.addEventListener("click", () => setStudyOverride(key));
+  btn?.addEventListener("click", () => {
+    setStudyOverride(key);
+    // Each study has its own default mapping CSV and output subfolder, so
+    // the paths on screen must follow the choice.
+    refreshSession();
+  });
+});
+
+// ---------------------------------------------------------------------
+// Landing stage
+// ---------------------------------------------------------------------
+
+// The three steps fade in one after another on open (delays live in the
+// markup as --reveal-delay). Nothing is pre-highlighted: on arrival the
+// operator has not done anything yet, so marking step 1 as "active" was
+// claiming progress that had not happened.
+requestAnimationFrame(() => document.body.classList.add("ready"));
+
+els.scrollCue?.addEventListener("click", () => {
+  document.getElementById("workbench")?.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+// ---------------------------------------------------------------------
+// Session inputs: ID-mapping CSV and output destination
+// ---------------------------------------------------------------------
+
+function renderSession(info) {
+  if (!info) return;
+  const csvChosen = !info.mapping_csv_is_default;
+  els.csvPath.textContent = info.mapping_csv || "";
+  els.outPath.textContent = info.output_dir || "";
+  els.csvClearBtn.classList.toggle("hidden", !csvChosen);
+  els.outClearBtn.classList.toggle("hidden", info.output_is_default);
+  els.outState.textContent = info.output_is_default ? "Using default" : "Custom";
+  els.outState.className = `session-state ${info.output_is_default ? "" : "is-custom"}`;
+
+  // The distinction that actually matters: is this a continuing ID space
+  // (returning patients keep their existing ID, and new IDs are checked
+  // against the ones already issued) or a fresh one?
+  if (info.error) {
+    els.csvState.textContent = "Unreadable";
+    els.csvState.className = "session-state is-bad";
+    els.csvHint.textContent = `That file could not be read: ${info.error}`;
+    els.csvBox.classList.add("is-bad");
+    return;
+  }
+  els.csvBox.classList.remove("is-bad");
+  if (info.continuing) {
+    els.csvState.textContent = "Continuing";
+    els.csvState.className = "session-state is-good";
+    els.csvHint.textContent =
+      `${info.existing_patients} patient(s) already in this mapping. A returning patient keeps their existing ` +
+      `Anonymized ID, and any new ID is checked against all ${info.existing_ids} already issued.`;
+  } else {
+    els.csvState.textContent = csvChosen ? "Empty file" : "New mapping";
+    els.csvState.className = `session-state ${csvChosen ? "is-warn" : ""}`;
+    els.csvHint.textContent = csvChosen
+      ? "This file has no patients in it yet, so nothing can be matched as a follow-up. If you meant to continue an earlier session, pick that session's CSV instead."
+      : "No previous mapping loaded, so every patient here counts as new. Continuing an earlier session? Load its CSV first.";
+  }
+}
+
+async function refreshSession() {
+  try {
+    const info = await window.pywebview.api.describe_session(
+      state.mappingCsv, state.outputDir, state.studyOverride || "egfr");
+    if (info && info.success !== false) renderSession(info);
+  } catch (err) {
+    console.error("describe_session failed", err);
+  }
+}
+
+els.csvBrowseBtn?.addEventListener("click", async () => {
+  const picked = await window.pywebview.api.pick_mapping_csv();
+  if (picked?.picked) {
+    state.mappingCsv = picked.path;
+    refreshSession();
+  }
+});
+els.csvClearBtn?.addEventListener("click", () => {
+  state.mappingCsv = null;
+  refreshSession();
+});
+els.outBrowseBtn?.addEventListener("click", async () => {
+  const picked = await window.pywebview.api.pick_output_folder();
+  if (picked?.picked) {
+    state.outputDir = picked.path;
+    refreshSession();
+  }
+});
+els.outClearBtn?.addEventListener("click", () => {
+  state.outputDir = null;
+  refreshSession();
 });
 
 // ---------------------------------------------------------------------
@@ -116,12 +223,6 @@ async function loadAppInfo() {
   try {
     const info = await window.pywebview.api.get_app_info();
     if (els.hospitalChip) els.hospitalChip.textContent = info.hospital_name;
-    if (els.footerMappingPath) {
-      els.footerMappingPath.textContent = `${info.egfr_mapping_csv} · ${info.kfre_mapping_csv}`;
-    }
-    if (els.footerOutputPath) {
-      els.footerOutputPath.textContent = `${info.egfr_output_dir} · ${info.kfre_output_dir}`;
-    }
     // Both eGFR/KFRE mapping CSVs and both output folders live directly
     // under this one shared app-data root -- opening it (rather than
     // guessing which of the two study-specific paths the operator meant)
@@ -133,12 +234,6 @@ async function loadAppInfo() {
   }
 }
 
-els.footerMappingPath?.addEventListener("click", () => {
-  if (state.appDataDir) window.pywebview.api.reveal_in_explorer(state.appDataDir);
-});
-els.footerOutputPath?.addEventListener("click", () => {
-  if (state.appDataDir) window.pywebview.api.reveal_in_explorer(state.appDataDir);
-});
 
 // ---------------------------------------------------------------------
 // Selection -> processing
@@ -191,7 +286,8 @@ async function runProcess(paths, isFolder) {
   [els.resetBtn, els.revealBtn, els.approveBtn].forEach((b) => b && (b.disabled = true));
 
   try {
-    const result = await window.pywebview.api.process_package(paths, isFolder, state.studyOverride || null);
+    const result = await window.pywebview.api.process_package(
+      paths, isFolder, state.studyOverride || null, state.mappingCsv, state.outputDir);
     state.lastResult = result;
     renderResult(result);
   } catch (err) {
@@ -359,10 +455,13 @@ function renderBatchResult(result, studyLabel) {
   els.previewGrid.classList.add("hidden");
   els.resetBtn.disabled = false;
   els.revealBtn.disabled = false;
-  // Approving and deleting originals are single-patient actions: with a
-  // whole batch on screen, one click would stand in for a review the
-  // operator has not actually done per patient. Cross-check per row first.
-  els.approveBtn.disabled = true;
+  // Cross-checking is optional, so Approve is enabled as soon as anything
+  // was written. In practice an operator verifies the first few packages
+  // closely and then trusts the pipeline; blocking Approve behind a review
+  // they have chosen to skip just leaves them with no way to finish.
+  els.approveBtn.disabled = (s.succeeded || 0) === 0;
+  // Per-patient review is reached from each row's own Cross-check button,
+  // so the toolbar one stays off in batch: it has no single subject.
   els.crosscheckBtn.disabled = true;
 }
 
@@ -370,7 +469,11 @@ function renderBatchResult(result, studyLabel) {
 // Cross-check review (original vs anonymized)
 // ---------------------------------------------------------------------
 
-let ccState = { tab: "images", manifest: null, subject: "", observer: null };
+// Rows are paged rather than all mounted at once. Ten frames is already a
+// long scroll; a future patient with fifty would make the tab unusable and
+// hold fifty decoded previews in memory. PAGE_SIZE bounds both.
+const CC_PAGE_SIZE = 4;
+let ccState = { tab: "images", manifest: null, subject: "", observer: null, page: 0, items: [] };
 
 function openWorkbench() {
   ccState.observer?.disconnect();
@@ -412,17 +515,38 @@ function selectCrosscheckTab(tab) {
   ccState.tab = tab;
   els.crosscheckTabs.forEach((btn) => btn.classList.toggle("active", btn.dataset.ccTab === tab));
 
-  const items = (ccState.manifest && ccState.manifest[tab]) || [];
+  ccState.items = (ccState.manifest && ccState.manifest[tab]) || [];
+  ccState.page = 0;
   els.crosscheckHint.textContent = {
     images: "Scroll through every ultrasound frame. Check that the burned-in banner across the top of each image is blanked in the anonymized copy. Clearing tags does not remove text printed into the pixels.",
     metadata: "Tag-by-tag comparison. Changed and removed tags are listed first; unchanged tags are collapsed.",
     reports: "Each report page, original beside anonymized. Check that every patient identifier is blacked out.",
   }[tab] || "";
 
-  renderCrosscheckRows(items, tab);
+  renderCrosscheckPage();
 }
 
-function renderCrosscheckRows(items, tab) {
+function renderCrosscheckPage() {
+  const items = ccState.items;
+  const pages = Math.max(1, Math.ceil(items.length / CC_PAGE_SIZE));
+  ccState.page = Math.min(Math.max(0, ccState.page), pages - 1);
+  const start = ccState.page * CC_PAGE_SIZE;
+  const slice = items.slice(start, start + CC_PAGE_SIZE);
+
+  els.ccProgress.textContent = items.length
+    ? `Showing ${start + 1} to ${start + slice.length} of ${items.length}`
+    : "Nothing to compare";
+  els.ccPrev.disabled = ccState.page === 0;
+  els.ccNext.disabled = ccState.page >= pages - 1;
+
+  renderCrosscheckRows(slice, ccState.tab, start);
+  els.crosscheckBody.scrollTop = 0;
+}
+
+els.ccPrev?.addEventListener("click", () => { ccState.page -= 1; renderCrosscheckPage(); });
+els.ccNext?.addEventListener("click", () => { ccState.page += 1; renderCrosscheckPage(); });
+
+function renderCrosscheckRows(items, tab, offset = 0) {
   ccState.observer?.disconnect();
   els.crosscheckBody.innerHTML = "";
 
@@ -436,7 +560,7 @@ function renderCrosscheckRows(items, tab) {
     row.className = "cc-row";
     row.dataset.index = String(i);
     row.innerHTML = `
-      <h4><span class="cc-row-num">${i + 1} / ${items.length}</span> ${escapeHTML(item.label)}
+      <h4><span class="cc-row-num">${offset + i + 1} / ${ccState.items.length}</span> ${escapeHTML(item.label)}
         ${item.category ? `<small>${escapeHTML(item.category)}</small>` : ""}</h4>
       <div class="cc-panes" data-cc-content><p class="cc-loading">Loading…</p></div>
     `;
@@ -599,4 +723,19 @@ els.resetBtn?.addEventListener("click", () => {
   setStep(1);
 });
 
-loadAppInfo();
+// pywebview injects window.pywebview.api asynchronously and fires
+// `pywebviewready` when it is callable. Calling straight away raced that
+// and left the session paths showing their "…" placeholder, so the
+// operator could not see which mapping CSV was actually in use. If the
+// event already fired before this script ran, the API is present and we
+// go immediately.
+function startup() {
+  loadAppInfo();
+  refreshSession();
+}
+
+if (window.pywebview && window.pywebview.api) {
+  startup();
+} else {
+  window.addEventListener("pywebviewready", startup, { once: true });
+}

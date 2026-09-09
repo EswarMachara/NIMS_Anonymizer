@@ -27,21 +27,31 @@
     </div>
   </header>
 
-  <main class="anon-workbench">
-    <section class="anon-hero-panel">
-      <div>
+  <!-- Landing stage. Holds the full viewport on open, then the workbench
+       begins below it. The three steps fade in one after another; no step
+       is pre-highlighted, since on arrival nothing has happened yet. -->
+  <section class="landing-stage" id="landing-stage">
+    <div class="landing-inner">
+      <div class="landing-copy">
         <span class="eyebrow">PII removal workflow · Runs fully offline</span>
         <h1>Renal Study Anonymizer</h1>
         <p>Select one patient's eGFR or KFRE package, or a folder holding many patients.
           Then cross-check the originals against the anonymized output, side by side,
           before you keep anything. Nothing leaves this computer.</p>
       </div>
-      <div class="anon-hero-steps" aria-label="Anonymization workflow">
-        <div id="step-1" class="step-active"><span>1</span><strong>Select package</strong><small>Folder, files, or drag &amp; drop</small></div>
-        <div id="step-2"><span>2</span><strong>Cross-check output</strong><small>Images, metadata &amp; reports</small></div>
-        <div id="step-3"><span>3</span><strong>Approve</strong><small>Keep the anonymized package</small></div>
+      <div class="landing-steps" aria-label="Anonymization workflow">
+        <div id="step-1" class="reveal" style="--reveal-delay: 0.15s"><span>1</span><strong>Select package</strong><small>Folder, files, or drag and drop</small></div>
+        <div id="step-2" class="reveal" style="--reveal-delay: 0.35s"><span>2</span><strong>Cross-check output</strong><small>Images, metadata and reports</small></div>
+        <div id="step-3" class="reveal" style="--reveal-delay: 0.55s"><span>3</span><strong>Approve</strong><small>Keep the anonymized package</small></div>
       </div>
-    </section>
+    </div>
+    <button class="scroll-cue" id="scroll-cue" type="button" aria-label="Scroll to the workbench">
+      <span>Begin</span>
+      <b></b>
+    </button>
+  </section>
+
+  <main class="anon-workbench" id="workbench">
 
     <section class="anon-layout">
       <article class="panel-card anon-intro-card">
@@ -104,32 +114,46 @@
               by the CR No or Lab No. printed inside each PDF, never by filename.</p>
           </div>
         </div>
-        <div class="anon-policy-grid">
-          <div>
-            <strong>Study auto-detected</strong>
-            <p>DICOM images present → eGFR pipeline. PDF-only → KFRE pipeline. Override below if needed.</p>
-          </div>
-          <div>
-            <strong>Follow-up aware</strong>
-            <p>The same patient (matched by CR No / Lab No.) always gets the same Anonymized ID across visits.</p>
-          </div>
-          <div>
-            <strong>Human approval gate</strong>
-            <p>Review the original vs. anonymized preview before the output is kept.</p>
-          </div>
-        </div>
-        <div class="study-toggle" role="group" aria-label="Study type override">
-          <button type="button" class="active" id="study-auto" data-study="">Auto-detect</button>
-          <button type="button" id="study-egfr" data-study="egfr">eGFR</button>
-          <button type="button" id="study-kfre" data-study="kfre">KFRE</button>
-        </div>
-        <p class="study-toggle-note" id="study-detected-note">&nbsp;</p>
       </article>
 
       <article class="panel-card anon-tool-card">
         <div class="anon-card-head">
-          <h2>Select &amp; anonymize</h2>
+          <h2>Select and anonymize</h2>
           <p>Choose a folder, choose individual files, or drag them in below.</p>
+        </div>
+
+        <!-- Session inputs. The mapping CSV gets its own box rather than
+             sitting behind a default nobody sees: it is the only thing that
+             makes a returning patient resolve to the ID they already have,
+             and the list of issued IDs a new one is checked against. -->
+        <div class="session-inputs">
+          <div class="session-box" id="csv-box">
+            <div class="session-box-head">
+              <span class="session-label">ID-mapping CSV</span>
+              <span class="session-state" id="csv-state">Using default</span>
+            </div>
+            <p class="session-hint" id="csv-hint">Continuing from a previous session? Load its CSV so returning
+              patients keep the same Anonymized ID.</p>
+            <code class="session-path" id="csv-path" title="Full path in use">…</code>
+            <div class="session-actions">
+              <button type="button" class="package-upload-action" id="csv-browse-btn">Browse CSV</button>
+              <button type="button" class="session-clear hidden" id="csv-clear-btn">Use default</button>
+            </div>
+          </div>
+
+          <div class="session-box" id="out-box">
+            <div class="session-box-head">
+              <span class="session-label">Output destination</span>
+              <span class="session-state" id="out-state">Using default</span>
+            </div>
+            <p class="session-hint">Where the anonymized copies are written. A per-study subfolder is created
+              inside whatever you choose.</p>
+            <code class="session-path" id="out-path" title="Full path in use">…</code>
+            <div class="session-actions">
+              <button type="button" class="package-upload-action" id="out-browse-btn">Browse folder</button>
+              <button type="button" class="session-clear hidden" id="out-clear-btn">Use default</button>
+            </div>
+          </div>
         </div>
 
         <div class="upload-grid">
@@ -153,6 +177,18 @@
                  needed or the window reads as frozen. -->
             <div class="progress-track hidden" id="progress-track" role="progressbar" aria-label="Anonymizing">
               <div class="progress-bar"></div>
+            </div>
+
+            <!-- Study selection lives with the selection controls it
+                 affects, rather than in the explanatory pane opposite. -->
+            <div class="study-picker">
+              <span class="study-picker-label">Study</span>
+              <div class="study-toggle" role="group" aria-label="Study type">
+                <button type="button" class="active" id="study-auto" data-study="">Auto-detect</button>
+                <button type="button" id="study-egfr" data-study="egfr">eGFR</button>
+                <button type="button" id="study-kfre" data-study="kfre">KFRE</button>
+              </div>
+              <p class="study-toggle-note" id="study-detected-note">&nbsp;</p>
             </div>
           </div>
         </div>
@@ -232,15 +268,16 @@
     </nav>
 
     <p class="crosscheck-hint" id="crosscheck-hint"></p>
+    <div class="crosscheck-toolbar">
+      <span class="cc-progress" id="cc-progress"></span>
+      <div class="cc-pager">
+        <button type="button" class="package-upload-action" id="cc-prev" disabled>Previous</button>
+        <button type="button" class="package-upload-action" id="cc-next" disabled>Next</button>
+      </div>
+    </div>
     <div class="crosscheck-body" id="crosscheck-body"></div>
   </section>
 
-  <footer class="app-footer">
-    <strong>Where things are kept:</strong> the anonymized output and the confidential ID-mapping file
-    never leave this computer. Mapping file (access-restricted, and the only file that still links an
-    Anonymized ID to a real patient): <code id="footer-mapping-path" title="Click to open containing folder">…</code>
-    · Output folder: <code id="footer-output-path" title="Click to open containing folder">…</code>
-  </footer>
 
   <script src="app.js"></script>
 </body>

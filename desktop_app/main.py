@@ -108,13 +108,60 @@ class Api:
             return {"picked": False}
         return {"picked": True, "paths": list(result), "is_folder": False}
 
-    def process_package(self, paths, is_folder, study_override=None):
+    def pick_mapping_csv(self):
+        """
+        Choose an EXISTING ID-mapping CSV to continue from.
+
+        This is the file that makes a returning patient resolve to the
+        Anonymized ID they were already given, and it doubles as the list
+        of issued IDs a newly minted one is checked against. Picking the
+        wrong one, or forgetting it, means a follow-up visit silently
+        becomes a second patient. Hence a dedicated picker rather than an
+        implied default the operator never sees.
+        """
+        window = webview.windows[0]
+        result = window.create_file_dialog(
+            webview.OPEN_DIALOG,
+            allow_multiple=False,
+            file_types=("CSV mapping file (*.csv)", "All files (*.*)"),
+        )
+        if not result:
+            return {"picked": False}
+        return {"picked": True, "path": result[0]}
+
+    def pick_output_folder(self):
+        """Choose where anonymized output is written (a per-study subfolder
+        is still created inside it, so two studies can share one
+        destination without mixing)."""
+        window = webview.windows[0]
+        result = window.create_file_dialog(webview.FOLDER_DIALOG)
+        if not result:
+            return {"picked": False}
+        return {"picked": True, "path": result[0]}
+
+    def describe_session(self, mapping_csv=None, output_dir=None, study="egfr"):
+        """Resolve what THIS run would actually use, and report what the
+        mapping file already contains, so the operator can see whether they
+        are continuing an existing ID space or starting a new one before
+        anything is written."""
+        try:
+            return {"success": True, **engine.describe_session(mapping_csv, output_dir, study)}
+        except Exception as exc:  # noqa: BLE001
+            return {"success": False, "errors": [str(exc)]}
+
+    def process_package(self, paths, is_folder, study_override=None, mapping_csv=None, output_dir=None):
         # Reset the allowlist on every new run -- only the package that was
         # JUST processed (below) is ever eligible for deletion, never a
         # stale set left over from an earlier package in this session.
         self._deletable_paths = set()
         try:
-            result = engine.process_package(paths, is_folder, study_override or None)
+            result = engine.process_package(
+                paths,
+                is_folder,
+                study_override or None,
+                mapping_csv or None,
+                output_dir or None,
+            )
             self._deletable_paths = {
                 pair["original"] for pair in result.get("preview_pairs", []) if pair.get("original")
             }

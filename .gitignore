@@ -13,6 +13,13 @@ desktop_app/venv/
 desktop_app/build/build/
 desktop_app/build/dist/
 
+# --- Reference checkout, not part of this repo ---
+# The data-collection portal is cloned here only so its design system can be
+# read while building the desktop app's UI. It is its own repository with its
+# own history; committing it here would either nest a repo or duplicate
+# someone else's code into this one.
+/Renal-Data-Collection/
+
 # --- Editor / OS cruft ---
 .vscode/
 .DS_Store
