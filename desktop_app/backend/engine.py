@@ -161,11 +161,24 @@ def get_output_root(study: str, override: Optional[str] = None) -> str:
     just gets its own <AnonID>/ subfolder, matching the CLI's own per-patient
     convention -- nothing ever needs pruning or renaming.
     """
-    name = "Anonymized_eGFR" if study == "egfr" else "Anonymized_KFRE"
-    base = os.path.abspath(override) if override else get_app_data_dir()
-    path = os.path.join(base, name)
+    path = output_root_path(study, override)
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def output_root_path(study: str, override: Optional[str] = None) -> str:
+    """Where output WOULD go, without creating anything.
+
+    Separate from get_output_root() because describe_session() only reports
+    on a run that has not happened yet, and a function that answers "where
+    would this go?" must not answer it by making the folder. It did, and
+    left an empty Anonymized_eGFR/ sitting next to a KFRE operator's real
+    output -- a directory nobody asked for, named after the wrong study,
+    inside a folder they were about to share.
+    """
+    name = "Anonymized_eGFR" if study == "egfr" else "Anonymized_KFRE"
+    base = os.path.abspath(override) if override else get_app_data_dir()
+    return os.path.join(base, name)
 
 
 # ==========================================================================
@@ -1391,7 +1404,7 @@ def describe_session(
         "continuing": bool(exists and rows),
         "ledger_path": ledger_path,
         "processed_files": processed_files,
-        "output_dir": get_output_root(study, output_dir),
+        "output_dir": output_root_path(study, output_dir),
         "output_is_default": not bool(output_dir),
         "error": error,
     }
@@ -1404,8 +1417,8 @@ def get_app_info() -> Dict[str, Any]:
         "app_data_dir": get_app_data_dir(),
         "egfr_mapping_csv": get_mapping_csv_path("egfr"),
         "kfre_mapping_csv": get_mapping_csv_path("kfre"),
-        "egfr_output_dir": get_output_root("egfr"),
-        "kfre_output_dir": get_output_root("kfre"),
+        "egfr_output_dir": output_root_path("egfr"),
+        "kfre_output_dir": output_root_path("kfre"),
     }
 
 
