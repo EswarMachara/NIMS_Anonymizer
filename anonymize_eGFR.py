@@ -117,10 +117,12 @@ If --mapping-csv is omitted, the script prompts for a path interactively.
 from __future__ import annotations
 
 import argparse
+import copy
 import glob
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field as dc_field
 from typing import Dict, List, Optional, Tuple
 
@@ -403,28 +405,64 @@ def redact_template_b_pdf(src_path: str, out_path: str, fields: "ac.TemplateBFie
         doc.close()
 
 
+# Parsed-PDF cache, keyed by identity-on-disk rather than path alone so an
+# edited or replaced file is never served stale. Process-local and never
+# persisted: it exists only to stop the SAME file being parsed repeatedly
+# within one run.
+#
+# The desktop app resolves identity twice over the same PDFs -- once to
+# decide whether a selection holds one patient or many, then again per
+# patient -- and PDF parsing was measured as the single largest cost of a
+# batch (6.7s + 6.4s of a 17.3s run, against 4.2s for all the image work).
+# The second pass is now free.
+_CLASSIFY_CACHE: Dict[Tuple[str, int, int], Tuple[str, object]] = {}
+
+
 def classify_and_extract(pdf_path: str):
     """Returns one of:
       ("scanned", None)
       ("A", TemplateAFields)
       ("B", TemplateBFields)
       ("unknown", None)
+
+    Result is cached per file (see _CLASSIFY_CACHE). Callers get a shallow
+    COPY of the fields object, never the cached instance, so that a caller
+    which mutates what it is handed cannot corrupt what the next caller
+    sees.
     """
+    key: Optional[Tuple[str, int, int]] = None
+    try:
+        st = os.stat(pdf_path)
+        key = (os.path.abspath(pdf_path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None  # unreadable: fall through and let the real work report it
+
+    if key is not None:
+        cached = _CLASSIFY_CACHE.get(key)
+        if cached is not None:
+            kind, fields = cached
+            return kind, (copy.copy(fields) if fields is not None else None)
+
     cls = ac.classify_pdf(pdf_path)
     if cls.is_scanned_no_pii:
-        return "scanned", None
+        result = ("scanned", None)
+    else:
+        doc = fitz.open(pdf_path)
+        try:
+            templ = ac.detect_report_template(doc)
+            if templ == "A":
+                result = ("A", ac.extract_template_a_fields(doc))
+            elif templ == "B":
+                result = ("B", ac.extract_template_b_fields(doc))
+            else:
+                result = ("unknown", None)
+        finally:
+            doc.close()
 
-    doc = fitz.open(pdf_path)
-    try:
-        templ = ac.detect_report_template(doc)
-        if templ == "A":
-            return "A", ac.extract_template_a_fields(doc)
-        elif templ == "B":
-            return "B", ac.extract_template_b_fields(doc)
-        else:
-            return "unknown", None
-    finally:
-        doc.close()
+    if key is not None:
+        _CLASSIFY_CACHE[key] = result
+    kind, fields = result
+    return kind, (copy.copy(fields) if fields is not None else None)
 
 
 # ==========================================================================
@@ -514,8 +552,18 @@ def process_one_dicom_file(
     # otherwise with "Pixel Data hasn't been encapsulated..."). Output files
     # are consequently larger than the source (uncompressed vs originally
     # JPEG-compressed), an expected, acceptable tradeoff for correctness.
+    #
+    # Decoder is named explicitly rather than left to pydicom's own
+    # preference order. Measured on this corpus (920x1590x3 JPEG Baseline):
+    # pylibjpeg 194 ms/frame, pillow 92 ms/frame -- and pydicom picks
+    # pylibjpeg when both are installed, so leaving it to choose costs 2.1x
+    # on every single image. Falls back to whatever is available if pillow
+    # is not, so a build without it still works, just slower.
     if ds.file_meta.TransferSyntaxUID.is_compressed:
-        ds.decompress()
+        try:
+            ds.decompress(decoding_plugin="pillow")
+        except Exception:  # noqa: BLE001 -- plugin absent/unusable, not a data problem
+            ds.decompress()
 
     redact_dicom_banner(ds)
     scrub_dicom_dataset(ds, anon_id)
@@ -578,6 +626,14 @@ def resolve_patient_identity(
     pdfs = find_pdfs(patient_dir)
     unknown_paths: List[str] = []
 
+    # Left sequential deliberately. Classification is expensive (~385 ms per
+    # PDF, over half a second for a scanned CRF, since classify_pdf reads
+    # every page's text and tests whether each page is a full-page image),
+    # so threading it looks obvious -- but it was tried and measured at no
+    # gain (18.1s vs 18.3s over the same batch, inside noise). Unlike the
+    # JPEG decoder, PyMuPDF appears to hold the GIL through text
+    # extraction, so the work serialises anyway. Not worth carrying
+    # concurrency here for nothing.
     for pdf_path in pdfs:
         kind, extracted = classify_and_extract(pdf_path)
         if kind == "scanned":
@@ -714,18 +770,66 @@ def write_patient_outputs(rec: PatientRecord, output_dir: str) -> PatientRecord:
         print(f"    passthrough (scanned, no extractable PII): {os.path.basename(src_path)} -> {out_path}")
 
     # ---- DICOM files ----
-    uid_map: Dict[str, str] = {}
+    #
+    # Decoding dominates this pass: measured at ~89% of per-patient time,
+    # against ~5% for the disk write. That work happens inside the JPEG
+    # decoder's C code, which releases the GIL, so plain threads give a
+    # real speedup here without the multiprocessing machinery (which would
+    # also have to survive being frozen by PyInstaller on Windows).
+    #
+    # uid_map is built COMPLETELY UP FRONT, single-threaded, and is only
+    # read afterwards. Populating it from inside the workers would race:
+    # two threads can both find a Study/Series UID absent and mint two
+    # different replacements for it, silently splitting one series into
+    # two in the output. Reading headers is cheap (~2 ms/file, no pixel
+    # data) so this costs almost nothing.
+    jobs: List[tuple] = []
     for kidney_dir in find_kidney_subfolders(patient_dir):
         side_name = os.path.basename(kidney_dir.rstrip(os.sep))
         out_kidney_dir = os.path.join(out_patient_dir, side_name)
         for dcm_path in find_dcm_files(kidney_dir):
-            out_dcm_path = os.path.join(out_kidney_dir, os.path.basename(dcm_path))
-            try:
-                process_one_dicom_file(dcm_path, out_dcm_path, anon_id, uid_map)
-                rec.dcm_count += 1
-            except Exception as e:
-                rec.errors.append(f"DICOM error on {dcm_path}: {e}")
-                print(f"    ERROR processing DICOM {dcm_path}: {e}")
+            jobs.append((dcm_path, os.path.join(out_kidney_dir, os.path.basename(dcm_path))))
+
+    uid_map: Dict[str, str] = {}
+    for dcm_path, _out in jobs:
+        try:
+            header = pydicom.dcmread(dcm_path, stop_before_pixels=True)
+        except Exception:  # noqa: BLE001 -- reported per file by the worker below
+            continue
+        for uid_tag in ("StudyInstanceUID", "SeriesInstanceUID"):
+            old_uid = str(getattr(header, uid_tag, "") or "")
+            if old_uid and old_uid not in uid_map:
+                uid_map[old_uid] = generate_uid()
+
+    def _one(job):
+        dcm_path, out_dcm_path = job
+        try:
+            process_one_dicom_file(dcm_path, out_dcm_path, anon_id, uid_map)
+            return (dcm_path, None)
+        except Exception as e:  # noqa: BLE001
+            return (dcm_path, str(e))
+
+    # Results are collected and applied to `rec` on this thread afterwards,
+    # so nothing mutates the record concurrently.
+    #
+    # Worker count follows the machine. Measured on a 16-core box, 10 frames
+    # of this corpus: pillow 0.97s sequential -> 0.33s at 4 threads -> 0.20s
+    # at 16 (5.0x). Capped at 16 because each in-flight frame holds a full
+    # uncompressed copy (~4.4 MB here) and the returns flatten out, not
+    # because more threads hurt.
+    max_workers = min(16, (os.cpu_count() or 2), max(1, len(jobs)))
+    if len(jobs) > 1 and max_workers > 1:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            outcomes = list(pool.map(_one, jobs))
+    else:
+        outcomes = [_one(job) for job in jobs]
+
+    for dcm_path, error in outcomes:
+        if error is None:
+            rec.dcm_count += 1
+        else:
+            rec.errors.append(f"DICOM error on {dcm_path}: {error}")
+            print(f"    ERROR processing DICOM {dcm_path}: {error}")
     print(f"    {rec.dcm_count} DICOM file(s) anonymized across {len(find_kidney_subfolders(patient_dir))} kidney-side subfolder(s).")
 
     return rec
