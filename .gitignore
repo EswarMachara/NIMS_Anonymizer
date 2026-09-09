@@ -62,3 +62,6 @@ Anonymized_KFRE/
 
 # Transient artifact of desktop_app/build/ui_preview.py
 desktop_app/web/_ui_preview.html
+
+# Inno Setup output -- the built installer, rebuilt by CI on every release
+desktop_app/build/Output/

@@ -140,7 +140,124 @@ jobs:
           }
           Write-Host "Built executable passed its self-test."
 
+      - name: Install Inno Setup (pinned)
+        # Pinned to the exact version the installer script is developed and
+        # tested against. The runner image ships *an* Inno Setup, but its
+        # version drifts between image releases, and directives here are
+        # version-sensitive (ArchitecturesAllowed=x64compatible needs 6.3+).
+        # A build tool whose version nobody chose is a build that breaks on
+        # someone else's schedule.
+        shell: pwsh
+        run: |
+          $url = "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe"
+          $exe = Join-Path $env:RUNNER_TEMP "innosetup.exe"
+          Invoke-WebRequest -Uri $url -OutFile $exe
+          Start-Process -FilePath $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" -Wait
+          $iscc = Get-ChildItem "C:\Program Files (x86)","C:\Program Files","$env:LOCALAPPDATA\Programs" -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue |
+                    Select-Object -First 1 -ExpandProperty FullName
+          if (-not $iscc) { throw "Inno Setup installed but ISCC.exe was not found" }
+          Write-Host "ISCC: $iscc"
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Resolve installer version
+        # A release drives the version from its tag; every other trigger
+        # keeps the script's own default. Windows needs a numeric dotted
+        # form, so a leading "v" is stripped and anything non-numeric falls
+        # back rather than producing an installer Windows cannot version.
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          $version = "1.0.0"
+          if ($tag) {
+            $candidate = $tag -replace '^[vV]', ''
+            if ($candidate -match '^\d+(\.\d+){0,3}$') {
+              $version = $candidate
+            } else {
+              Write-Host "Tag '$tag' is not a numeric version; using $version"
+            }
+          }
+          Write-Host "Installer version: $version"
+          "INSTALLER_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build the Windows installer
+        working-directory: desktop_app/build
+        shell: pwsh
+        run: |
+          & "$env:ISCC" "/DAppVersion=$env:INSTALLER_VERSION" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          $setup = Get-ChildItem Output -Filter "*.exe" | Select-Object -First 1
+          if (-not $setup) { throw "ISCC reported success but produced no installer" }
+          if ($setup.Length -lt 10MB) {
+            throw "Installer is suspiciously small ($($setup.Length) bytes) -- it probably packaged an empty dist/"
+          }
+          Write-Host "Installer OK: $($setup.Name) ($([math]::Round($setup.Length/1MB,1)) MB)"
+          Get-FileHash $setup.FullName -Algorithm SHA256 | Format-List
+          "SETUP_PATH=$($setup.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install it, then self-test the INSTALLED app
+        # The end-to-end check. Self-testing dist/ proves PyInstaller
+        # produced a working app; it does not prove the installer ships all
+        # of it. A missing recursesubdirs flag, or an _internal/ subfolder
+        # left behind, yields an installer that succeeds and an application
+        # that dies on launch -- which is only visible from the installed
+        # copy. Install, run, uninstall, and check the uninstall was clean.
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "install.log"
+          $p = Start-Process -FilePath "$env:SETUP_PATH" `
+                 -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Last 40
+            throw "Installer failed with exit code $($p.ExitCode)"
+          }
+
+          $app = Join-Path $env:LOCALAPPDATA "Programs\TANUH Renal Anonymizer"
+          $exe = Join-Path $app "TANUH-Renal-Anonymizer.exe"
+          if (-not (Test-Path $exe)) { throw "Installed, but $exe is missing" }
+          $count = (Get-ChildItem $app -Recurse -File | Measure-Object).Count
+          Write-Host "Installed $count file(s) to $app"
+
+          # The reason this installer exists: files it writes must carry no
+          # Mark-of-the-Web. A zip-extracted build did, and .NET then refused
+          # to load the managed assembly pywebview uses to reach WebView2.
+          $marked = Get-ChildItem $app -Recurse -File | Where-Object {
+            try { Get-Item $_.FullName -Stream Zone.Identifier -ErrorAction Stop | Out-Null; $true } catch { $false }
+          }
+          if ($marked) { throw "$($marked.Count) installed file(s) carry Zone.Identifier -- the app would fail to launch" }
+          Write-Host "No installed file carries Mark-of-the-Web."
+
+          $shortcut = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\TANUH Renal Anonymizer.lnk"
+          if (-not (Test-Path $shortcut)) { throw "No Start Menu shortcut was created -- the app would not be searchable" }
+          Write-Host "Start Menu shortcut present."
+
+          $out = Join-Path $env:RUNNER_TEMP "installed-selftest-out.txt"
+          $err = Join-Path $env:RUNNER_TEMP "installed-selftest-err.txt"
+          $s = Start-Process -FilePath $exe -ArgumentList "--self-test" -Wait -PassThru -NoNewWindow `
+                 -RedirectStandardOutput $out -RedirectStandardError $err
+          Get-Content $out -ErrorAction SilentlyContinue
+          Get-Content $err -ErrorAction SilentlyContinue
+          if ($s.ExitCode -ne 0) { throw "The INSTALLED application failed its own self-test (exit $($s.ExitCode))" }
+          Write-Host "Installed application passed its self-test."
+
+          $unins = Get-ChildItem $app -Filter "unins*.exe" | Select-Object -First 1
+          $u = Start-Process -FilePath $unins.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($u.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($u.ExitCode)" }
+          Start-Sleep -Seconds 3
+          if (Test-Path $app) { throw "Uninstall left $app behind" }
+          if (Test-Path $shortcut) { throw "Uninstall left the Start Menu shortcut behind" }
+          Write-Host "Uninstall was clean."
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: TANUH-Renal-Anonymizer-installer
+          path: desktop_app/build/Output/*.exe
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Upload build artifact
+        # The unpacked build, kept alongside the installer for IT who would
+        # rather inspect or run it without installing anything.
         uses: actions/upload-artifact@v4
         with:
           name: TANUH-Renal-Anonymizer-windows
@@ -153,20 +270,38 @@ jobs:
     if: github.event_name == 'release'
     runs-on: windows-latest
     steps:
+      - name: Download the installer
+        uses: actions/download-artifact@v4
+        with:
+          name: TANUH-Renal-Anonymizer-installer
+          path: installer
+
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
           name: TANUH-Renal-Anonymizer-windows
           path: TANUH-Renal-Anonymizer
 
-      - name: Zip the build for distribution
-        # Distribute the whole folder, not just the .exe -- this is a
-        # --onedir build, the exe needs its sibling _internal/ folder.
+      - name: Zip the build as a portable fallback
+        # Secondary, for IT who want to inspect or run the build without
+        # installing it. Note this zip is exactly the download that carries
+        # the Mark-of-the-Web problem the installer exists to avoid: every
+        # file Explorer extracts from it needs unblocking before the app
+        # will start. Named "portable" so nobody reaches for it by default.
         shell: pwsh
-        run: Compress-Archive -Path TANUH-Renal-Anonymizer -DestinationPath TANUH-Renal-Anonymizer-windows.zip
+        run: Compress-Archive -Path TANUH-Renal-Anonymizer -DestinationPath TANUH-Renal-Anonymizer-portable-windows.zip
 
-      - name: Attach zip to the GitHub Release
+      - name: Attach the installer and the portable zip to the Release
+        # The installer is uploaded FIRST so it is the top asset on the
+        # release page -- the one file a clinical user should ever click.
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.event.release.tag_name }}" TANUH-Renal-Anonymizer-windows.zip --clobber
+        run: |
+          $setup = Get-ChildItem installer -Filter "*.exe" | Select-Object -First 1
+          if (-not $setup) { throw "No installer was produced by the build job" }
+          gh release upload "${{ github.event.release.tag_name }}" $setup.FullName --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Failed to upload the installer" }
+          gh release upload "${{ github.event.release.tag_name }}" TANUH-Renal-Anonymizer-portable-windows.zip --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Failed to upload the portable zip" }
+          Write-Host "Attached: $($setup.Name) and TANUH-Renal-Anonymizer-portable-windows.zip"

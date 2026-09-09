@@ -81,7 +81,13 @@ pip install -r requirements.txt
 python3 main.py
 ```
 
-## Building the Windows .exe
+## Installing it (end users)
+
+See **[`INSTALL.md`](../INSTALL.md)** — download one `Setup` file from the
+Releases page, run it, then find the app by typing its name into the Start
+Menu. No admin rights needed.
+
+## Building the Windows .exe and installer
 
 See **`build/WINDOWS_BUILD.md`** — must be run on an actual Windows machine
 (PyInstaller does not cross-compile). Short version:
@@ -91,9 +97,16 @@ cd desktop_app
 pip install -r requirements.txt
 cd build
 pyinstaller app.spec
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer.iss
 ```
 
-Output: `desktop_app/build/dist/TANUH-Renal-Anonymizer/TANUH-Renal-Anonymizer.exe`
+Output:
+- `desktop_app/build/dist/TANUH-Renal-Anonymizer/TANUH-Renal-Anonymizer.exe` (the app)
+- `desktop_app/build/Output/TANUH-Renal-Anonymizer-Setup-1.0.0.exe` (what people download)
+
+`.github/workflows/build-windows-exe.yml` does both on a clean runner, then
+installs the installer and self-tests the **installed** copy before
+publishing it.
 
 ## Project layout
 
@@ -111,7 +124,9 @@ desktop_app/
 ├── requirements.txt
 └── build/
     ├── app.spec          # PyInstaller spec
+    ├── installer.iss     # Inno Setup script -> the downloadable Setup .exe
     ├── app_icon.ico
+    ├── ui_preview.py     # dev-only: render the UI in WebView2, assert on the DOM
     └── WINDOWS_BUILD.md
 ```
 

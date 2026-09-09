@@ -115,12 +115,49 @@ oddly after editing `app.spec` itself.)
   reinstalling/updating the app itself). The app's own footer shows the
   exact paths and lets you click to open them.
 
+## 5b. Build the installer
+
+Step 4 produces a folder. Step 5b turns it into the single file people
+actually download.
+
+```powershell
+# One time, pinned to the version CI uses and this script is tested against
+winget install --id JRSoftware.InnoSetup --version 6.7.3 --exact
+
+# Every build, from desktop_app/build/, AFTER pyinstaller has run
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer.iss
+```
+
+Output: `Output\TANUH-Renal-Anonymizer-Setup-1.0.0.exe` — about 38 MB,
+down from 108 MB unpacked. Pass `/DAppVersion=1.2.3` to stamp a different
+version (CI does this from the release tag).
+
+`.github/workflows/build-windows-exe.yml` runs all of the above on a clean
+runner, then **installs the result and self-tests the installed copy**
+before uploading it. That last part is the check that matters: self-testing
+`dist/` proves PyInstaller produced a working app, not that the installer
+ships all of it.
+
 ## 6. Distributing to other hospital workstations
 
-Copy the whole `TANUH-Renal-Anonymizer` output folder (from step 4) to
-another Windows PC — no Python installation needed there, everything
-required is bundled inside. Only the WebView2 Runtime prerequisite (step 0)
-still applies on the target machine.
+**Give people the installer.** It is one file, it puts the app in the Start
+Menu so it can be opened by name, and it registers an entry in Add/Remove
+Programs. Hand end users [`INSTALL.md`](../../INSTALL.md) rather than this
+document.
+
+The installer also fixes a real defect, not just an inconvenience. Copying
+or downloading the unpacked folder as a **zip** gives every extracted file a
+Mark-of-the-Web stream (`Zone.Identifier`, `ZoneId=3`), and .NET refuses to
+load a managed assembly that carries one — which is how pywebview reaches
+WebView2. The app died at launch with `Python.Runtime.Loader.Initialize`
+until all 173 files were unblocked by hand. Inno writes its payload from its
+own archive, so installed files carry no such stream; CI asserts this on
+every build.
+
+Copying the unpacked `TANUH-Renal-Anonymizer` folder directly (over a share
+or on a USB stick, not through a browser download or a zip) still works and
+needs no Python on the target. Only the WebView2 Runtime prerequisite
+(step 0) applies either way, and the installer checks for it.
 
 ## Troubleshooting
 
