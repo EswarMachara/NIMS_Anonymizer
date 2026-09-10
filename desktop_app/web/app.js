@@ -23,8 +23,6 @@ const els = {
   chooseFilesBtn: document.getElementById("choose-files-btn"),
   packageTile: document.getElementById("package-tile"),
   progressTrack: document.getElementById("progress-track"),
-  landingStage: document.getElementById("landing-stage"),
-  scrollCue: document.getElementById("scroll-cue"),
   csvState: document.getElementById("csv-state"),
   csvHint: document.getElementById("csv-hint"),
   csvPath: document.getElementById("csv-path"),
@@ -119,18 +117,16 @@ Object.entries(els.studyButtons).forEach(([key, btn]) => {
 });
 
 // ---------------------------------------------------------------------
-// Landing stage
+// Entrance
 // ---------------------------------------------------------------------
 
-// The three steps fade in one after another on open (delays live in the
-// markup as --reveal-delay). Nothing is pre-highlighted: on arrival the
-// operator has not done anything yet, so marking step 1 as "active" was
-// claiming progress that had not happened.
+// The app opens directly on the workbench -- there is no landing stage to
+// scroll past any more. The head row and the two cards still fade in one
+// after another (delays live in the markup as --reveal-delay), which is
+// what keeps the arrival from feeling abrupt. Nothing in the stepper is
+// pre-highlighted: on arrival the operator has not done anything yet, so
+// marking step 1 "active" would claim progress that has not happened.
 requestAnimationFrame(() => document.body.classList.add("ready"));
-
-els.scrollCue?.addEventListener("click", () => {
-  document.getElementById("workbench")?.scrollIntoView({ behavior: "smooth", block: "start" });
-});
 
 // ---------------------------------------------------------------------
 // Session inputs: ID-mapping CSV and output destination

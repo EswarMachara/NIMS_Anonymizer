@@ -27,34 +27,28 @@
     </div>
   </header>
 
-  <!-- Landing stage. Holds the full viewport on open, then the workbench
-       begins below it. The three steps fade in one after another; no step
-       is pre-highlighted, since on arrival nothing has happened yet. -->
-  <section class="landing-stage" id="landing-stage">
-    <div class="landing-inner">
-      <div class="landing-copy">
-        <span class="eyebrow">PII removal workflow · Runs fully offline</span>
-        <h1>Renal Study Anonymizer</h1>
-        <p>Select one patient's eGFR or KFRE package, or a folder holding many patients.
-          Then cross-check the originals against the anonymized output, side by side,
-          before you keep anything. Nothing leaves this computer.</p>
-      </div>
-      <div class="landing-steps" aria-label="Anonymization workflow">
-        <div id="step-1" class="reveal" style="--reveal-delay: 0.15s"><span>1</span><strong>Select package</strong><small>Folder, files, or drag and drop</small></div>
-        <div id="step-2" class="reveal" style="--reveal-delay: 0.35s"><span>2</span><strong>Cross-check output</strong><small>Images, metadata and reports</small></div>
-        <div id="step-3" class="reveal" style="--reveal-delay: 0.55s"><span>3</span><strong>Approve</strong><small>Keep the anonymized package</small></div>
-      </div>
-    </div>
-    <button class="scroll-cue" id="scroll-cue" type="button" aria-label="Scroll to the workbench">
-      <span>Begin</span>
-      <b></b>
-    </button>
-  </section>
-
   <main class="anon-workbench" id="workbench">
 
+    <!-- One frame, one title. The workflow used to sit below a full-height
+         landing stage that had to be scrolled past on every launch; the
+         stage's title and its three steps now ride here as a single row, so
+         the app opens on the thing the operator came to use. The step ids
+         are unchanged -- setStep() still drives them. -->
+    <div class="workbench-head reveal" style="--reveal-delay: 0.02s">
+      <div class="workbench-title">
+        <span class="eyebrow">PII removal workflow</span>
+        <h1>Renal Study Anonymizer</h1>
+      </div>
+      <ol class="workflow-steps" aria-label="Anonymization workflow">
+        <li id="step-1"><span>1</span><b>Select package</b></li>
+        <li id="step-2"><span>2</span><b>Cross-check</b></li>
+        <li id="step-3"><span>3</span><b>Approve</b></li>
+      </ol>
+      <span class="offline-chip" title="This application makes no network connections.">Runs fully offline</span>
+    </div>
+
     <section class="anon-layout">
-      <article class="panel-card anon-intro-card">
+      <article class="panel-card anon-intro-card reveal" style="--reveal-delay: 0.10s">
         <div class="anon-card-head">
           <span class="eyebrow">Expected input</span>
           <h2>One patient, or a whole folder of them</h2>
@@ -116,7 +110,7 @@
         </div>
       </article>
 
-      <article class="panel-card anon-tool-card">
+      <article class="panel-card anon-tool-card reveal" style="--reveal-delay: 0.18s">
         <div class="anon-card-head">
           <h2>Select and anonymize</h2>
           <p>Choose a folder, choose individual files, or drag them in below.</p>

@@ -40,6 +40,12 @@ payload = json.load(open(payload_path, encoding="utf-8")) if payload_path else {
 driver = open(driver_path, encoding="utf-8").read() if driver_path else \
     'renderBatchResult(PAYLOAD, "KFRE");'
 
+# Window size as WxH, so a layout claim can be checked at the short viewports
+# that actually break it rather than only at the one this machine happens to
+# have.
+size = next((a for a in args if re.fullmatch(r"\d+x\d+", a)), "1500x950")
+WIN_W, WIN_H = (int(v) for v in size.split("x"))
+
 index = open(os.path.join(WEB_DIR, "index.html"), encoding="utf-8").read()
 body = re.search(r"<body>(.*)</body>", index, re.S).group(1)
 body = body.replace('<script src="app.js"></script>', "")
@@ -133,11 +139,12 @@ def inspect(window):
     results["overflow"] = window.evaluate_js(
         "document.documentElement.scrollWidth > document.documentElement.clientWidth")
     results["trace"] = window.evaluate_js("window.__trace || []")
+    results["frame"] = window.evaluate_js("window.__frame || null")
     results["driver_error"] = window.evaluate_js("window.__err")
     window.destroy()
 
 
-win = webview.create_window("UI preview", url=PREVIEW, width=1500, height=950)
+win = webview.create_window("UI preview", url=PREVIEW, width=WIN_W, height=WIN_H)
 webview.start(inspect, win)
 
 if os.path.exists(PREVIEW):

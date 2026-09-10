@@ -35,6 +35,14 @@ html, body {
 
 body {
   margin: 0;
+  /* The app is one screen: header, then the workbench filling what is left.
+     Expressed as a flex column rather than "100vh minus a guessed header
+     height" -- that guess was 74px against a header whose real height is
+     padding-driven, and being a few pixels out is what pushes the action
+     row below the fold. */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
   background:
     radial-gradient(circle at 12% 8%, rgba(20, 134, 140, 0.16), transparent 34%),
     radial-gradient(circle at 86% 18%, rgba(110, 231, 224, 0.18), transparent 32%),
@@ -103,6 +111,7 @@ button:not(:disabled):active { transform: translateY(1px); }
 /* ---- Header / brand (personalized: TANUH + partner hospital) ---- */
 
 .anon-topbar {
+  flex: none;
   position: sticky;
   top: 0;
   z-index: 20;
@@ -178,143 +187,131 @@ button:not(:disabled):active { transform: translateY(1px); }
   font-weight: 700;
 }
 
-/* ---- Landing stage (full viewport on open, workbench below) ---- */
-/* Pattern follows the data-collection portal's own landing: a stage sized
-   to the viewport minus the sticky topbar, with a pulsing scroll cue. */
-
-.landing-stage {
-  position: relative;
-  display: grid;
-  place-items: center;
-  min-height: calc(100vh - 74px);
-  width: min(1320px, calc(100% - 6rem));
-  margin: 0 auto;
-  padding: clamp(2rem, 6vh, 5rem) 0 5rem;
-}
-
-.landing-inner {
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(300px, 0.95fr);
-  gap: clamp(2rem, 5vw, 4rem);
-  align-items: center;
-  width: 100%;
-}
-
-.landing-copy h1 {
-  margin: 0.6rem 0 1.1rem;
-  color: #073f45;
-  font-size: clamp(2rem, 4.2vw, 3.1rem);
-  line-height: 1.06;
-  letter-spacing: -0.035em;
-}
-
-.landing-copy p {
-  margin: 0;
-  max-width: 46ch;
-  color: #4a5f72;
-  font-size: clamp(1rem, 1.4vw, 1.14rem);
-  line-height: 1.75;
-}
-
-.landing-steps { display: grid; gap: 1rem; }
-
-.landing-steps > div {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  column-gap: 1.1rem;
-  row-gap: 0.25rem;
-  align-items: center;
-  padding: 1.15rem 1.3rem;
-  border: 1px solid rgba(10, 107, 111, 0.16);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
-}
-
-.landing-steps span {
-  grid-column: 1;
-  grid-row: 1 / span 2;
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 13px;
-  background: linear-gradient(135deg, #0a9f95, #073f45);
-  color: #fff;
-  font-weight: 800;
-}
-
-.landing-steps strong { grid-column: 2; grid-row: 1; color: #082f37; font-weight: 800; font-size: 0.98rem; }
-.landing-steps small { grid-column: 2; grid-row: 2; color: #526376; font-size: 0.83rem; }
-
-/* Staggered entrance. Each step carries its own --reveal-delay in the
-   markup; body.ready is set on the first frame so the transition actually
-   runs instead of being the element's initial state. */
+/* ---- Entrance ---- */
+/* The app used to open on a full-height landing stage that had to be
+   scrolled past before any work could start. That is gone; what is kept is
+   the staggered arrival, because an interface that assembles itself in the
+   first half-second reads as deliberate rather than abrupt. Each element
+   carries its own --reveal-delay in the markup; body.ready is set on the
+   first frame so the transition runs instead of being the initial state. */
 .reveal {
   opacity: 0;
-  transform: translateY(14px);
-  transition: opacity 0.55s ease, transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+  transform: translateY(10px);
+  transition: opacity 0.5s ease, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
   transition-delay: var(--reveal-delay, 0s);
 }
 
 body.ready .reveal { opacity: 1; transform: none; }
 
-.landing-copy {
-  opacity: 0;
-  transform: translateY(10px);
-  transition: opacity 0.6s ease, transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-body.ready .landing-copy { opacity: 1; transform: none; }
-
 @media (prefers-reduced-motion: reduce) {
-  .reveal, .landing-copy { opacity: 1; transform: none; transition: none; }
+  .reveal { opacity: 1; transform: none; transition: none; }
 }
 
-.scroll-cue {
-  position: absolute;
-  left: 50%;
-  bottom: 1.2rem;
-  transform: translateX(-50%);
-  display: grid;
-  justify-items: center;
-  gap: 0.4rem;
-  border: 0;
-  background: transparent;
-  color: #0f766e;
-  font: inherit;
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.6s ease 0.8s;
+/* ---- Workbench head (title + workflow stepper, one row) ---- */
+/* Deliberately ONE row. It replaces a whole viewport of landing, so it has
+   to earn its height: the title, where the operator is in the workflow, and
+   the offline promise, on a single line. */
+
+.workbench-head {
+  display: flex;
+  align-items: center;
+  gap: clamp(1rem, 3vw, 2.4rem);
+  margin-bottom: clamp(0.8rem, 2vh, 1.5rem);
 }
 
-body.ready .scroll-cue { opacity: 1; }
+.workbench-title { min-width: 0; }
 
-.scroll-cue b {
-  width: 2px;
-  height: 34px;
+.workbench-title h1 {
+  margin: 0.15rem 0 0;
+  color: #073f45;
+  font-size: clamp(1.2rem, 2.2vw, 1.7rem);
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+  white-space: nowrap;
+}
+
+.workflow-steps {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0 auto;
+  padding: 0;
+  list-style: none;
+}
+
+/* The connector between steps is drawn on the item, not as a separate
+   element, so the number of steps can change without touching the markup. */
+.workflow-steps li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.9rem 0.4rem 0.45rem;
+  border: 1px solid rgba(10, 107, 111, 0.16);
   border-radius: 999px;
-  background: linear-gradient(#0f9a87, transparent);
-  animation: scroll-pulse 1.8s ease-in-out infinite;
+  background: rgba(255, 255, 255, 0.72);
+  color: #526376;
+  font-size: 0.82rem;
+  transition: border-color 0.25s ease, color 0.25s ease, box-shadow 0.25s ease;
 }
 
-@keyframes scroll-pulse {
-  0%, 100% { opacity: 0.4; transform: scaleY(0.65); transform-origin: top; }
-  50%      { opacity: 1;   transform: scaleY(1); }
+.workflow-steps li + li::before {
+  content: "";
+  width: 0.5rem;
+  height: 1px;
+  margin-left: -0.5rem;
+  background: rgba(10, 107, 111, 0.25);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .scroll-cue { opacity: 1; transition: none; }
-  .scroll-cue b { animation: none; }
+.workflow-steps span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #e6f2f1;
+  color: #0f766e;
+  font-size: 0.76rem;
+  font-weight: 800;
+  transition: background 0.25s ease, color 0.25s ease;
 }
 
-@media (max-width: 1100px) {
-  .landing-inner { grid-template-columns: 1fr; }
+.workflow-steps b { font-weight: 700; }
+
+/* Nothing is pre-highlighted: on arrival the operator has not done anything
+   yet, so marking step 1 active would claim progress that has not happened.
+   setStep() adds these once something actually occurs. */
+.workflow-steps li.step-active {
+  border-color: #0f9a87;
+  color: #073f45;
+  box-shadow: 0 0 0 3px rgba(20, 134, 140, 0.12);
+}
+
+.workflow-steps li.step-active span { background: linear-gradient(135deg, #0a9f95, #073f45); color: #fff; }
+.workflow-steps li.step-done span { background: linear-gradient(135deg, #0e9f6e, #073f45); color: #fff; }
+.workflow-steps li.step-done { color: #0f766e; }
+
+.offline-chip {
+  flex: none;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid rgba(14, 159, 110, 0.3);
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #065f46;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* Narrow windows: the stepper labels go first, then the chip. The numbers
+   stay, because they are what shows where the operator is. */
+@media (max-width: 1180px) {
+  .workflow-steps b { display: none; }
+  .workflow-steps li { padding: 0.35rem 0.45rem; }
+}
+
+@media (max-width: 900px) {
+  .offline-chip { display: none; }
 }
 
 /* ---- Session inputs (mapping CSV + output destination) ---- */
@@ -404,8 +401,8 @@ body.ready .scroll-cue { opacity: 1; }
 
 /* ---- Layout ---- */
 
-/* The workbench is meant to be read as ONE frame: everything visible at
-   once after the landing, not something you scroll through. So it is sized
+/* The workbench is the ONLY frame: everything visible at once when the app
+   opens, not something you scroll into or through. So it is sized
    to the viewport and its internals are measured in vh, not fixed rems --
    on a short window the padding, gaps and drop zone all give way together
    instead of the page growing a scrollbar. Anything that can genuinely be
@@ -415,79 +412,13 @@ body.ready .scroll-cue { opacity: 1; }
   width: min(1320px, calc(100% - 6rem));
   margin: 0 auto;
   padding: clamp(0.9rem, 2.2vh, 2rem) 0 clamp(1rem, 2.5vh, 2rem);
-  min-height: calc(100vh - 74px);
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
 }
 
 .anon-workbench > .anon-layout { flex: 1; min-height: 0; }
-
-.anon-hero-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(300px, 0.95fr);
-  gap: clamp(1.6rem, 4vw, 2.6rem);
-  align-items: center;
-  margin-bottom: 2rem;
-  padding: clamp(1.8rem, 4vw, 2.8rem);
-  border: 1px solid rgba(10, 107, 111, 0.16);
-  border-radius: 28px;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(244, 252, 250, 0.92)),
-    radial-gradient(circle at 90% 12%, rgba(20, 134, 140, 0.16), transparent 42%);
-  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
-}
-
-.anon-hero-panel h1 {
-  margin: 0.5rem 0 0.9rem;
-  color: #073f45;
-  font-size: clamp(1.75rem, 3vw, 2.55rem);
-  line-height: 1.1;
-  letter-spacing: -0.03em;
-}
-
-.anon-hero-panel p {
-  margin: 0;
-  color: #526376;
-  font-size: 1.02rem;
-  line-height: 1.72;
-}
-
-.anon-hero-steps {
-  display: grid;
-  gap: 0.9rem;
-}
-
-.anon-hero-steps > div {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  column-gap: 1rem;
-  row-gap: 0.25rem;
-  align-items: center;
-  padding: 0.95rem 1.1rem;
-  border: 1px solid rgba(10, 107, 111, 0.14);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.76);
-}
-
-.anon-hero-steps span {
-  grid-column: 1;
-  grid-row: 1 / span 2;
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #0a9f95, #073f45);
-  color: #fff;
-  font-weight: 800;
-}
-
-.anon-hero-steps strong { grid-column: 2; grid-row: 1; color: #082f37; font-weight: 800; font-size: 0.92rem; }
-.anon-hero-steps small { grid-column: 2; grid-row: 2; color: #526376; font-size: 0.8rem; }
-.anon-hero-steps > div.step-active { border-color: #0f9a87; box-shadow: 0 0 0 3px rgba(20, 134, 140, 0.12); }
-.anon-hero-steps > div.step-done span { background: linear-gradient(135deg, #0e9f6e, #073f45); }
 
 .anon-layout {
   display: grid;
@@ -1326,12 +1257,48 @@ body.ready .scroll-cue { opacity: 1; }
   .anon-intro-card > .anon-card-head p { display: none; }
 }
 
-/* Safety net. However far the compaction goes, some window will still be
-   too short for the content -- and a control the operator cannot reach is
-   worse than one they have to scroll to. So the tool card itself becomes
-   scrollable rather than letting Approve get clipped off the bottom with
-   no way to get at it. The frame stays viewport-height either way. */
+/* Short-viewport compaction, in three passes. Removing the landing stage
+   freed a whole viewport, and the point of spending it is that the action
+   row -- Clear, Cross-check, Show output folder, Approve -- stays in the
+   frame on an ordinary 1366x768 hospital laptop, not only on a large
+   monitor. Each pass drops the least load-bearing thing still on screen. */
+
+/* Pass 1: prose that only restates what is already visible beside it. */
 @media (max-height: 940px) {
+  /* "Choose a folder, choose individual files, or drag them in below."
+     directly above a drop zone that says exactly that. */
+  .anon-tool-card > .anon-card-head p { display: none; }
+  .upload-subtitle { display: none; }
+  .upload-tile { min-height: clamp(120px, 17vh, 180px); }
+}
+
+/* Pass 2: the decorative and the merely helpful. */
+@media (max-height: 880px) {
+  .upload-icon { display: none; }
+  .session-box { padding: 0.8rem 0.9rem 0.85rem; }
+  .package-upload-actions { margin: 0.55rem 0; }
+  .anon-status-card { margin-top: 0.55rem; }
+  .btn-secondary, .btn-premium { padding: 0.72rem 1.2rem; }
+  .upload-tile { min-height: clamp(96px, 13vh, 140px); }
+}
+
+/* Pass 3: structural padding. Nothing further is removed -- from here the
+   frame just closes up. Sized to clear a 1366x768 laptop, which is what a
+   ward workstation most often is. */
+@media (max-height: 800px) {
+  .anon-workbench { padding-top: 0.6rem; padding-bottom: 0.6rem; }
+  .workbench-head { margin-bottom: 0.5rem; }
+  .upload-tile { min-height: 84px; padding: 0.7rem 1rem; }
+  .study-picker { margin-top: 0.5rem; }
+  .anon-tool-card .anon-actions { padding-top: 0.6rem; }
+}
+
+/* Safety net. However far the compaction goes, some window will still be
+   too short -- and a control the operator cannot reach is worse than one
+   they have to scroll to. So the card itself scrolls rather than letting
+   Approve get clipped off the bottom with no way to get at it. The frame
+   stays exactly one viewport either way. */
+@media (max-height: 720px) {
   .anon-layout > .panel-card { overflow-y: auto; }
 }
 
@@ -1341,14 +1308,17 @@ body.ready .scroll-cue { opacity: 1; }
   .anon-intro-card > .anon-card-head p { display: none; }
   .layout-foot { display: none; }
   .upload-guidance { display: none; }
-  .landing-copy p { font-size: 0.98rem; line-height: 1.6; }
-  .landing-steps > div { padding: 0.85rem 1.1rem; }
-  .landing-steps { gap: 0.7rem; }
+  /* The head row gives way before any card content does: the eyebrow is
+     decoration, and the step labels are readable from the numbers plus
+     the buttons they describe. */
+  .workbench-head .eyebrow { display: none; }
+  .workflow-steps b { display: none; }
+  .workflow-steps li { padding: 0.35rem 0.45rem; }
 }
 
 .hidden { display: none !important; }
 
 @media (max-width: 860px) {
-  .anon-hero-panel, .anon-layout { grid-template-columns: 1fr; }
+  .anon-layout { grid-template-columns: 1fr; }
   .anon-preview-grid { grid-template-columns: 1fr; }
 }
