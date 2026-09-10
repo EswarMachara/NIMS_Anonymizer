@@ -372,8 +372,8 @@ async function setSelection(paths, isFolder) {
   els.packageTile?.classList.add("tile-has-file");
   setStatus(
     isFolder
-      ? `Selected: ${state.selection.label}. Check the destination below, then Anonymize.`
-      : `Selected ${state.selection.label}. Check the destination below, then Anonymize.`,
+      ? `Selected: ${state.selection.label}. Check the destination path above, then Anonymize.`
+      : `Selected ${state.selection.label}. Check the destination path above, then Anonymize.`,
     true,
   );
   els.anonymizeBtn?.classList.remove("hidden");
