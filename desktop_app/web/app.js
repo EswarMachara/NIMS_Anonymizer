@@ -298,6 +298,17 @@ window.__anonOnDropResolved = function (paths, errorMessage) {
   if (paths && paths.length) runProcess(paths, false);
 };
 
+// Everything a run produces -- the banner, the per-patient table, the
+// action row -- is appended BELOW the drop zone, so on any window it lands
+// outside the card's visible area. The card scrolls, but expecting the
+// operator to discover that for themselves is how a finished run reads as
+// a frozen one. Take them to the result instead.
+function revealResult() {
+  requestAnimationFrame(() => {
+    els.resultBanner?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
 function setStatus(message, hasFile) {
   if (!els.statusCard) return;
   els.statusCard.textContent = message;
@@ -342,6 +353,7 @@ async function runProcess(paths, isFolder) {
     if (result?.study) state.detectedStudy = result.study;
     renderResult(result);
     refreshSession();
+    revealResult();
   } catch (err) {
     renderResult({ success: false, errors: [`Unexpected error: ${err}`] });
   } finally {
@@ -806,6 +818,7 @@ els.approveBtn?.addEventListener("click", () => {
 
 els.resetBtn?.addEventListener("click", () => {
   state.lastResult = null;
+  document.querySelectorAll(".anon-layout > .panel-card").forEach((c) => { c.scrollTop = 0; });
   // Nothing is selected any more, so nothing has been detected either.
   state.detectedStudy = null;
   refreshSession();

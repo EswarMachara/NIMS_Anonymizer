@@ -432,6 +432,13 @@ body.ready .reveal { opacity: 1; transform: none; }
 .anon-layout > .panel-card {
   display: flex;
   flex-direction: column;
+  /* Not gated on viewport height: what overflows is not the empty form but
+     the RESULT -- banner, per-patient table, action row -- which only
+     exists after a run. A card that fits before anonymizing says nothing
+     about the state the operator is actually left in. Y only, so the
+     rounded corners still clip horizontally. */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* Push the action row to the bottom of its card so both columns finish on
@@ -1293,14 +1300,6 @@ body.ready .reveal { opacity: 1; transform: none; }
   .anon-tool-card .anon-actions { padding-top: 0.6rem; }
 }
 
-/* Safety net. However far the compaction goes, some window will still be
-   too short -- and a control the operator cannot reach is worse than one
-   they have to scroll to. So the card itself scrolls rather than letting
-   Approve get clipped off the bottom with no way to get at it. The frame
-   stays exactly one viewport either way. */
-@media (max-height: 720px) {
-  .anon-layout > .panel-card { overflow-y: auto; }
-}
 
 @media (max-height: 820px) {
   /* Tighter still: drop the explanatory prose that is redundant once the

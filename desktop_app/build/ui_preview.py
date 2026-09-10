@@ -140,6 +140,7 @@ def inspect(window):
         "document.documentElement.scrollWidth > document.documentElement.clientWidth")
     results["trace"] = window.evaluate_js("window.__trace || []")
     results["frame"] = window.evaluate_js("window.__frame || null")
+    results["after"] = window.evaluate_js("window.__after || null")
     results["driver_error"] = window.evaluate_js("window.__err")
     window.destroy()
 
