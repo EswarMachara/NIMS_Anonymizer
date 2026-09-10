@@ -491,47 +491,60 @@ def _build_egfr_preview_pairs(rec: "eg.PatientRecord", out_patient_dir: str) -> 
 
 def _check_repeat(
     pairs: List[Dict[str, str]],
-    identity_key: str,
+    mapping_key: str,
     anon_id: str,
     mapping: "ac.MappingStore",
 ) -> Dict[str, Any]:
     """
-    Whether this submission is new material, the same files again, or the
-    same files whose output has since gone missing.
+    Whether this submission is new material, the same files again, some of
+    each, or the same files whose output has since gone missing.
 
     Outputs count as present only when EVERY expected one exists at the
     destination this run would write to, so pointing at a fresh output
     folder correctly rewrites everything instead of reporting it as done.
     """
     sources = [p["original"] for p in pairs if p.get("original")]
-    current = ac.fingerprint_files(sources) if sources else ""
-    stored = mapping.get_fingerprint(identity_key)
+    digests = ac.fingerprint_paths(sources)
+    known = mapping.get_fingerprints(mapping_key)
 
-    verdict = "new"
-    if current and stored and stored == current:
-        outputs_exist = bool(pairs) and all(
-            p.get("output") and os.path.exists(p["output"]) for p in pairs
-        )
+    already = [p for p in sources if digests[p] in known]
+    fresh = [p for p in sources if digests[p] not in known]
+
+    if not sources or not already:
+        verdict = "new"
+    elif not fresh:
+        outputs_exist = all(p.get("output") and os.path.exists(p["output"]) for p in pairs)
         verdict = "duplicate" if outputs_exist else "recreate"
+    else:
+        verdict = "partial"
 
-    # The same set of files already recorded against a DIFFERENT patient is
-    # not a repeat to skip: it means one source document sits in the
-    # anonymized dataset under two subject IDs, inflating the cohort.
-    conflict_key = None
-    if verdict == "new" and current:
-        other = mapping.find_key_by_fingerprint(current)
-        if other and other != identity_key.strip():
-            conflict_key = other
+    # A file already recorded against a DIFFERENT patient is not a repeat to
+    # skip: it means one source document sits in the anonymized dataset
+    # under two subject IDs, inflating the cohort.
+    conflicts = []
+    for path in fresh:
+        other = mapping.find_key_by_fingerprint(digests[path])
+        if other and other != mapping_key.strip():
+            conflicts.append({"name": os.path.basename(path), "previous_key": other})
+
+    seen_on = mapping.last_anonymized(mapping_key)
+    when = f" on {seen_on}" if seen_on else ""
 
     if verdict == "duplicate":
         message = (
-            f"Already anonymized. These are the same {len(sources)} file(s), byte for byte, "
-            f"and the anonymized output is still in place, so nothing was re-written."
+            f"Already anonymized{when}. These are the same {len(sources)} file(s), byte for "
+            f"byte, and the anonymized output is still in place, so nothing was re-written."
         )
     elif verdict == "recreate":
         message = (
-            f"Same {len(sources)} file(s) as a previous session, but their anonymized output "
-            f"was not present at this destination, so it has been written again."
+            f"Same {len(sources)} file(s) as a previous session{when}, but their anonymized "
+            f"output was not present at this destination, so it has been written again."
+        )
+    elif verdict == "partial":
+        message = (
+            f"{len(already)} of {len(sources)} file(s) were already anonymized{when}; "
+            f"{len(fresh)} are new. The whole package was re-written so the output stays "
+            f"consistent, and the new file(s) are included."
         )
     else:
         message = ""
@@ -540,24 +553,32 @@ def _check_repeat(
         "verdict": verdict,
         "skipped": verdict == "duplicate",
         "total": len(sources),
-        "fingerprint": current,
-        "conflict_with": conflict_key,
+        "already": len(already),
+        "fresh": len(fresh),
+        "digests": list(digests.values()),
+        "repeated_names": [os.path.basename(p) for p in already][:12],
+        "new_names": [os.path.basename(p) for p in fresh][:12],
+        "conflicts": conflicts,
         "message": message,
     }
 
 
 def _conflict_warnings(repeat: Dict[str, Any], anon_id: str) -> List[str]:
-    """Operator-facing text for a set of files already recorded against a
-    different patient. A warning, not an error: the run itself is sound, but
-    the dataset now holds one source document under two subject IDs and only
+    """Operator-facing text for files already recorded against a different
+    patient. A warning, not an error: the run itself is sound, but the
+    dataset now holds one source document under two subject IDs and only
     the operator can say which is right."""
-    other = repeat.get("conflict_with")
-    if not other:
+    conflicts = repeat.get("conflicts") or []
+    if not conflicts:
         return []
+    others = sorted({c["previous_key"] for c in conflicts})
+    names = ", ".join(c["name"] for c in conflicts[:6])
+    more = ", ..." if len(conflicts) > 6 else ""
     return [
-        f"These exact files are already recorded in this mapping against a different patient "
-        f"({other}), yet they resolve to {anon_id} here. The same patient may now appear twice "
-        f"in the anonymized dataset under two IDs -- check the mapping before sharing."
+        f"{len(conflicts)} file(s) here are already recorded in this mapping against a "
+        f"different patient ({', '.join(others)}), yet they resolve to {anon_id} now. The same "
+        f"patient may appear twice in the anonymized dataset under two IDs -- check the mapping "
+        f"before sharing. Files: {names}{more}"
     ]
 
 
@@ -637,8 +658,8 @@ def process_egfr_package(
     written = _only_written_pairs(pairs, write_started)
     # Recorded only when EVERY file made it. A partial failure must stay
     # unrecorded, or the retry would be called "already anonymized".
-    if len(written) == len(pairs) and repeat_report["fingerprint"]:
-        mapping.set_fingerprint(rec.mapping_key, repeat_report["fingerprint"])
+    if len(written) == len(pairs) and repeat_report["digests"]:
+        mapping.add_fingerprints(rec.mapping_key, repeat_report["digests"])
     if owns_mapping:
         mapping.save()
 
@@ -768,8 +789,8 @@ def process_kfre_package(
     scanned_pairs = _copy_scanned(scanned, output_root)
     written = _only_written_pairs(report_pairs + scanned_pairs, write_started)
     written_reports = [p for p in written if p in report_pairs]
-    if len(written_reports) == len(report_pairs) and repeat_report["fingerprint"]:
-        mapping.set_fingerprint(group.identity_key, repeat_report["fingerprint"])
+    if len(written_reports) == len(report_pairs) and repeat_report["digests"]:
+        mapping.add_fingerprints(group.identity_key, repeat_report["digests"])
     if owns_mapping:
         mapping.save()
 
@@ -1055,8 +1076,8 @@ def _batch_summary(patients: List[Dict[str, Any]]) -> Dict[str, int]:
         # "10 of 10 succeeded" can never quietly mean "and 7 of those were
         # the same files you gave me last week".
         "skipped_duplicates": sum(1 for p in patients if repeat_is(p, "duplicate")),
-        "rewritten_repeats": sum(1 for p in patients if repeat_is(p, "recreate")),
-        "conflicts": sum(1 for p in patients if (p.get("repeat") or {}).get("conflict_with")),
+        "partial_repeats": sum(1 for p in patients if repeat_is(p, "partial", "recreate")),
+        "conflicts": sum(len((p.get("repeat") or {}).get("conflicts") or []) for p in patients),
     }
 
 
@@ -1215,8 +1236,8 @@ def process_kfre_batch(
             continue
 
         written = _only_written_pairs(pairs, write_started)
-        if len(written) == len(pairs) and repeat_report["fingerprint"]:
-            mapping.set_fingerprint(group.identity_key, repeat_report["fingerprint"])
+        if len(written) == len(pairs) and repeat_report["digests"]:
+            mapping.add_fingerprints(group.identity_key, repeat_report["digests"])
         patients.append({
             "success": exit_code == 0 and len(written) == len(pairs),
             "study": "kfre",

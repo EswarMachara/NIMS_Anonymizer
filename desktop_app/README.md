@@ -29,12 +29,13 @@ constants and the logo file, not the rest of the app).
    CR No is enough to reuse their Anonymized ID, but it cannot tell a
    follow-up visit apart from the same documents being handed over twice —
    both look like "a patient I know". Each patient's row in the mapping CSV
-   carries a `Source Fingerprint`: a SHA-256 over the exact set of files
-   they were last anonymized from. Hand the same package in again and it is
-   reported as **already done** and left untouched, rather than silently
-   redone and the verified output overwritten. Add a file and the set is
-   different, so the patient is processed again in full. See
-   `anon_common.fingerprint_files()` for why it is a content hash rather
+   carries `Source Fingerprints`: one short content hash per file they have
+   been anonymized from. Hand the same package in again and it is reported
+   as **already done** and left untouched, rather than silently redone and
+   the verified output overwritten. Hand over the folder with one new
+   report added — the usual shape of a real follow-up — and it says
+   "13 of 14 file(s) were already anonymized on 2026-08-14; 1 are new".
+   See `anon_common.file_fingerprint()` for why it is a content hash rather
    than a report date.
 5. **Preview output** — original files vs. the anonymized copy, side by
    side, before you rely on the result.
@@ -57,9 +58,16 @@ back to a real patient) and the accumulated anonymized output live under:
 └── Anonymized_KFRE\<AnonID>\...
 ```
 
-The mapping CSV is the **whole** session memory — the ID mapping and, in
-its `Source Fingerprint` column, what each patient was last anonymized
-from. One file to carry between machines, and nothing to forget.
+The mapping CSV is the **whole** session memory — the ID mapping plus, in
+its last two columns, which files each patient has already been anonymized
+from and when. One file to carry between machines, and nothing to forget:
+
+```
+S. No,Original CR No,Anonymized ID,Name,Source Fingerprints,Last Anonymized
+1,3310126013…,EDAG2789,Surisetty …,b619861a3925646a f80b187a0d61a05c …,2026-09-10
+```
+
+The four columns anyone actually reads stay first and unchanged.
 
 (`~/.local/share/TANUH-Renal-Anonymizer/` on macOS/Linux, used only for
 development/testing on this machine — see `backend/engine.get_app_data_dir()`.)

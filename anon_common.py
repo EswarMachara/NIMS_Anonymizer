@@ -39,6 +39,7 @@ import os
 import random
 import re
 import string
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -50,11 +51,14 @@ except ImportError:  # pragma: no cover - fallback for older installs
 # --------------------------------------------------------------------------
 # Mapping CSV columns (exact order, exact header text) per spec.
 # --------------------------------------------------------------------------
-MAPPING_CSV_FIELDS = ["S. No", "Original CR No", "Anonymized ID", "Name", "Source Fingerprint"]
+MAPPING_CSV_FIELDS = [
+    "S. No", "Original CR No", "Anonymized ID", "Name",
+    "Source Fingerprints", "Last Anonymized",
+]
 
 # The first four columns are the mapping proper and every file must have
-# them. "Source Fingerprint" is additive -- a CSV written before it existed
-# loads fine and simply has no fingerprints yet -- so it is NOT required.
+# them. The last two are additive -- a CSV written before they existed loads
+# fine and simply has no fingerprints yet -- so they are NOT required.
 MAPPING_CSV_REQUIRED_FIELDS = MAPPING_CSV_FIELDS[:4]
 
 # Content-based scanned-PDF detection thresholds (see classify_pdf()).
@@ -119,7 +123,8 @@ class MappingStore:
                     row = {k: (v or "") for k, v in row.items() if k is not None}
                     # An older CSV has no fingerprint column at all; fill it in
                     # rather than special-casing every later read.
-                    row.setdefault("Source Fingerprint", "")
+                    row.setdefault("Source Fingerprints", "")
+                    row.setdefault("Last Anonymized", "")
                     store.rows.append(row)
                     key = row["Original CR No"].strip()
                     aid = row["Anonymized ID"].strip()
@@ -182,48 +187,67 @@ class MappingStore:
             "Original CR No": original_key,
             "Anonymized ID": new_id,
             "Name": name,
-            "Source Fingerprint": "",
+            "Source Fingerprints": "",
+            "Last Anonymized": "",
         }
         self.rows.append(row)
         self._key_to_id[original_key] = new_id
         self._key_to_row[original_key] = row
         return new_id, True
 
-    # ---- source fingerprint ----------------------------------------------
+    # ---- source fingerprints ----------------------------------------------
     #
-    # One value per patient standing for the exact set of files they were
-    # last anonymized from (see fingerprint_files). It answers the question
-    # the Anonymized ID cannot: a known CR No means "I have seen this
-    # PATIENT", not "I have seen these DOCUMENTS", so a folder that was
-    # already anonymized and is handed over a second time looks identical
-    # to a genuine follow-up visit -- and gets silently redone, overwriting
-    # output that was already checked.
+    # One short hash per FILE this patient has been anonymized from, kept as
+    # a space-separated list on their row. It answers the question the
+    # Anonymized ID cannot: a known CR No means "I have seen this PATIENT",
+    # not "I have seen these DOCUMENTS", so a folder that was already
+    # anonymized and is handed over again looks identical to a genuine
+    # follow-up visit -- and gets silently redone, overwriting output that
+    # was already checked.
+    #
+    # Per FILE rather than one hash for the whole set, because the common
+    # real shape of a follow-up is the operator handing over the whole
+    # patient folder again with one new report added to it. A set-level
+    # hash can only say "not identical"; a per-file list can say which of
+    # the fourteen are the thirteen already done.
+    #
+    # The list ACCUMULATES: a file once anonymized stays on the row, so a
+    # later submission of any subset is still recognised.
     #
     # Kept in the mapping CSV rather than a sidecar file so there is exactly
-    # one thing to carry between sessions. A separate file would have to
-    # travel with the CSV to be any use, and the first symptom of forgetting
-    # it is work being repeated.
+    # one thing to carry between sessions. A separate file has to travel
+    # with the CSV to be any use, and the first symptom of forgetting it is
+    # work being repeated. It is the LAST column so the four anyone reads
+    # stay readable.
 
-    def get_fingerprint(self, original_key: str) -> str:
+    def get_fingerprints(self, original_key: str) -> set:
         row = self._key_to_row.get(original_key.strip())
-        return (row or {}).get("Source Fingerprint", "").strip()
+        return set((row or {}).get("Source Fingerprints", "").split())
 
-    def set_fingerprint(self, original_key: str, fingerprint: str) -> None:
+    def add_fingerprints(self, original_key: str, digests) -> None:
+        """Union, never replace -- see the accumulation note above."""
         row = self._key_to_row.get(original_key.strip())
-        if row is not None:
-            row["Source Fingerprint"] = fingerprint
+        if row is None:
+            return
+        merged = set(row.get("Source Fingerprints", "").split()) | set(digests)
+        row["Source Fingerprints"] = " ".join(sorted(merged))
+        row["Last Anonymized"] = time.strftime("%Y-%m-%d")
 
-    def find_key_by_fingerprint(self, fingerprint: str) -> Optional[str]:
-        """The patient already recorded against this exact set of files, if
-        it is someone else. Finding one means the same documents have been
-        anonymized twice under two different Anonymized IDs -- a duplicate
-        subject in the dataset, not a repeat to skip."""
-        if not fingerprint:
+    def find_key_by_fingerprint(self, digest: str) -> Optional[str]:
+        """The patient already recorded against this exact file, if it is
+        someone else. Finding one means one source document has been
+        anonymized under two different Anonymized IDs -- a duplicate subject
+        in the dataset, not a repeat to skip."""
+        if not digest:
             return None
         for row in self.rows:
-            if row.get("Source Fingerprint", "").strip() == fingerprint:
+            if digest in row.get("Source Fingerprints", "").split():
                 return row.get("Original CR No", "").strip()
         return None
+
+    def last_anonymized(self, original_key: str) -> str:
+        row = self._key_to_row.get(original_key.strip())
+        return (row or {}).get("Last Anonymized", "").strip()
 
     def lookup_only(self, original_key: str) -> Optional[str]:
         return self._key_to_id.get(original_key.strip())
@@ -240,38 +264,31 @@ class MappingStore:
         print(f"[mapping-csv] {CONFIDENTIALITY_NOTICE}")
 
 
-def fingerprint_files(paths: List[str]) -> str:
+def file_fingerprint(path: str) -> str:
     """
-    One value standing for the exact set of files given, independent of the
-    order they arrive in.
+    A short content hash identifying one file.
 
-    Deliberately the WHOLE SET rather than a hash per file. Per-file hashes
-    would also identify which individual files repeat, but they need a list
-    per patient -- and a list does not belong in a CSV cell that a human
-    opens to look a patient up. The set-level answer is the one the workflow
-    acts on: identical set means this exact submission has already been
-    anonymized and nothing needs writing. Anything else -- a file added, a
-    file changed, a fresh export -- is treated as new material and processed,
-    which is the safe direction to be wrong in.
+    Truncated to 16 hex characters (64 bits). At hospital-study scale --
+    tens of thousands of files at the very most -- the chance of any two
+    colliding is on the order of one in ten million, and the consequence of
+    a collision is one file wrongly called a repeat, not corrupted output.
+    Short matters here because these are stored as a list in a spreadsheet
+    cell a human sometimes opens.
 
-    Truncated to 32 hex characters (128 bits): far beyond any collision risk
-    at hospital-study scale, and short enough to sit in a spreadsheet column
-    without swamping the four columns anyone actually reads.
-
-    A file that cannot be read contributes its path instead of its content,
+    A file that cannot be read gets a value derived from its name instead,
     so it reads as different material rather than silently matching.
     """
-    digests = []
-    for path in sorted(paths):
-        try:
-            digests.append(sha256_file(path))
-        except OSError:
-            digests.append("unreadable:" + os.path.basename(path))
-    combined = hashlib.sha256()
-    for digest in sorted(digests):
-        combined.update(digest.encode("utf-8"))
-        combined.update(b"|")
-    return combined.hexdigest()[:32]
+    try:
+        return sha256_file(path)[:16]
+    except OSError:
+        return "x" + hashlib.sha256(os.path.basename(path).encode("utf-8")).hexdigest()[:15]
+
+
+def fingerprint_paths(paths: List[str]) -> Dict[str, str]:
+    """{path: fingerprint} for every file given. Content only -- never the
+    filename, which changes between a patient's own visits and would make
+    the same document look new."""
+    return {path: file_fingerprint(path) for path in paths}
 
 
 def sha256_file(path: str, chunk_bytes: int = 1 << 20) -> str:

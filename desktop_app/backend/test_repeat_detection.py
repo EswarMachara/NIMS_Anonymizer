@@ -77,7 +77,7 @@ def scenario_same_files_twice(study, src):
     s1 = first["summary"]
     print(f"  run 1: {s1['succeeded']}/{s1['total']} patient(s) in {t_first:.1f}s -> {verdicts(first)}")
     check("run 1 succeeds", first["success"], str(first.get("errors")))
-    check("run 1 sees no repeats", s1["skipped_duplicates"] == 0 and s1["rewritten_repeats"] == 0)
+    check("run 1 sees no repeats", s1["skipped_duplicates"] == 0 and s1["partial_repeats"] == 0)
     check("run 1 mints a new ID per patient", s1["new_ids"] == s1["total"], f"new={s1['new_ids']}")
 
     after_first = snapshot(dest)
@@ -128,7 +128,7 @@ def scenario_added_file(study, src):
     """A returning patient whose folder holds last visit's files PLUS a new
     one. This is the shape a real follow-up actually arrives in -- the
     operator hands over the whole patient folder again -- so it must be
-    processed, not skipped."""
+    processed, not skipped, and reported as the partial repeat it is."""
     print(f"\n=== {study.upper()}: known patient, one genuinely new report ===")
     import pymupdf as fitz
 
@@ -161,26 +161,26 @@ def scenario_added_file(study, src):
     doc.save(twin, garbage=4, deflate=True)
     doc.close()
     check("the added report really is different bytes",
-          ac.sha256_file(twin) != ac.sha256_file(target))
+          ac.file_fingerprint(twin) != ac.file_fingerprint(target))
     print(f"  added: {os.path.relpath(twin, corpus)}")
 
     result = run(study, corpus, dest)
     v = verdicts(result)
     print(f"  -> {v}")
     check("run succeeds", result["success"], str(result.get("errors")))
-    # The fingerprint covers the whole SET of a patient's files, so adding
-    # one makes the set new: that patient is processed again in full rather
-    # than skipped. Redundant for the files that had not changed, and
-    # correct -- which is the trade for keeping this in one CSV column
-    # instead of a per-file list.
-    check("the patient with new material is NOT skipped", "new" in v, str(v))
+    check("the patient with new material is reported as a partial repeat",
+          "partial" in v, str(v))
     check("the other patients are still skipped as duplicates",
           v.count("duplicate") == seeded - 1, f"{v.count('duplicate')} of {seeded - 1}")
-    reprocessed = [p for p in result["patients"] if (p.get("repeat") or {}).get("verdict") == "new"]
-    if reprocessed:
+
+    partial = [p for p in result["patients"] if (p.get("repeat") or {}).get("verdict") == "partial"]
+    if partial:
+        r = partial[0]["repeat"]
+        print(f"     {r['message']}")
+        check("the message counts old and new files separately",
+              r["already"] > 0 and r["fresh"] > 0, f"already={r['already']} fresh={r['fresh']}")
         check("the new report was actually written",
-              any("FOLLOWUP_" in os.path.basename(p["original"])
-                  for p in reprocessed[0]["preview_pairs"]))
+              any("FOLLOWUP_" in os.path.basename(p["original"]) for p in partial[0]["preview_pairs"]))
     shutil.rmtree(staged, ignore_errors=True)
 
 
@@ -198,7 +198,7 @@ def scenario_duplicate_subject(study, src):
     # recorded against a different identity.
     csv_path = engine.get_mapping_csv_path(study, None, dest)
     store = ac.MappingStore.load_or_create(csv_path)
-    victim = next(r for r in store.rows if r.get("Source Fingerprint"))
+    victim = next(r for r in store.rows if r.get("Source Fingerprints"))
     victim["Original CR No"] = victim["Original CR No"] + "-OTHER"
     store.save()
 
@@ -228,9 +228,12 @@ def scenario_one_file_only(study, dest):
     check("no sidecar JSON is written anywhere", not sidecars, str(sidecars))
 
     store = ac.MappingStore.load_or_create(csv_path)
-    have_fp = sum(1 for r in store.rows if r.get("Source Fingerprint"))
-    check("every patient row carries a fingerprint",
+    have_fp = sum(1 for r in store.rows if r.get("Source Fingerprints"))
+    check("every patient row carries its file fingerprints",
           have_fp == len(store.rows), f"{have_fp} of {len(store.rows)}")
+    dated = sum(1 for r in store.rows if r.get("Last Anonymized"))
+    check("and the date it was last anonymized", dated == len(store.rows),
+          f"{dated} of {len(store.rows)}")
     check("the CSV is NOT inside the shareable output folder",
           not os.path.normcase(csv_path).startswith(os.path.normcase(out_root) + os.sep))
 
@@ -251,10 +254,10 @@ def scenario_older_csv_still_loads(study, dest):
         store = ac.MappingStore.load_or_create(legacy)
         loaded = len(store.rows) == 1
         reused = store.get_or_assign("331012601306032", "Some Patient") == ("ABCD1234", False)
-        blank = store.get_fingerprint("331012601306032") == ""
-        store.set_fingerprint("331012601306032", "deadbeef")
+        blank = store.get_fingerprints("331012601306032") == set()
+        store.add_fingerprints("331012601306032", ["deadbeef12345678"])
         store.save()
-        upgraded = ac.MappingStore.load_or_create(legacy).get_fingerprint("331012601306032") == "deadbeef"
+        upgraded = "deadbeef12345678" in ac.MappingStore.load_or_create(legacy).get_fingerprints("331012601306032")
     except Exception as exc:  # noqa: BLE001
         check("an older CSV still loads", False, str(exc))
         return

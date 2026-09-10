@@ -406,30 +406,37 @@ def self_test() -> int:
             for path, blob in ((a, b"first"), (b, b"second")):
                 with open(path, "wb") as f:
                     f.write(blob)
-
-            same = _ac.fingerprint_files([a, b]) == _ac.fingerprint_files([b, a])
-            changed = _ac.fingerprint_files([a, b]) != _ac.fingerprint_files([a])
+            fps = _ac.fingerprint_paths([a, b])
+            distinct = fps[a] != fps[b]
+            stable = _ac.file_fingerprint(a) == fps[a]
 
             csv_path = os.path.join(tmp, "probe_Mapping.csv")
             store = _ac.MappingStore.load_or_create(csv_path)
-            anon_id, _is_new = store.get_or_assign(original_key="TESTKEY", name="Probe")
-            store.set_fingerprint("TESTKEY", _ac.fingerprint_files([a, b]))
+            anon_id, _new = store.get_or_assign(original_key="TESTKEY", name="Probe")
+            store.add_fingerprints("TESTKEY", [fps[a]])
             store.save()
 
             reloaded = _ac.MappingStore.load_or_create(csv_path)
-            persisted = reloaded.get_fingerprint("TESTKEY") == _ac.fingerprint_files([a, b])
+            known = reloaded.get_fingerprints("TESTKEY")
+            recognised = fps[a] in known
+            unseen = fps[b] not in known
             id_kept = reloaded.get_or_assign(original_key="TESTKEY", name="Probe")[0] == anon_id
+            # Accumulates rather than replaces, which is what lets a later
+            # submission of any subset still be recognised.
+            reloaded.add_fingerprints("TESTKEY", [fps[b]])
+            grew = len(reloaded.get_fingerprints("TESTKEY")) == 2
 
-        if not same:
-            problems.append("a fingerprint changed with file order, so a repeat would not be recognised")
-        if not changed:
-            problems.append("a fingerprint did NOT change when the file set changed -- new data would be skipped")
-        if not persisted:
-            problems.append("the fingerprint did not survive a save/load of the mapping CSV")
-        if not id_kept:
-            problems.append("the Anonymized ID did not survive a save/load of the mapping CSV")
-        print(f"repeat detection: OK (order-independent={same}, set-sensitive={changed}, "
-              f"persists in CSV={persisted})")
+        for ok, msg in (
+            (distinct, "two different files produced the same fingerprint"),
+            (stable, "the same file produced two different fingerprints"),
+            (recognised, "an already-anonymized file was not recognised after a CSV reload"),
+            (unseen, "an unseen file was wrongly reported as already anonymized"),
+            (id_kept, "the Anonymized ID did not survive a save/load of the mapping CSV"),
+            (grew, "fingerprints replaced instead of accumulating"),
+        ):
+            if not ok:
+                problems.append(msg)
+        print(f"repeat detection: OK (per-file, persists in CSV={recognised}, accumulates={grew})")
     except Exception as exc:  # noqa: BLE001
         problems.append(f"repeat detection is broken in this build: {exc}")
         traceback.print_exc()

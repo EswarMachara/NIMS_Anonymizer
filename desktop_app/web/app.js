@@ -573,8 +573,8 @@ function renderBatchResult(result, studyLabel) {
   const repeats = dup
     ? ` ${dup} of them were the same files as before and were left exactly as they are.`
     : "";
-  const partial = s.rewritten_repeats
-    ? ` ${s.rewritten_repeats} had been done before but their output was missing, so it was written again.`
+  const partial = s.partial_repeats
+    ? ` ${s.partial_repeats} had some files already done and some new.`
     : "";
   els.resultBanner.innerHTML = `
     <strong>Batch anonymization (${studyLabel}): ${escapeHTML(String(s.succeeded || 0))} of
@@ -601,7 +601,7 @@ function renderBatchResult(result, studyLabel) {
     const statusLabel = isDuplicate
       ? "Already done"
       : p.success
-        ? "Anonymized"
+        ? (repeat.verdict === "partial" ? "Anonymized (+repeats)" : "Anonymized")
         : (p.anon_id ? "Partly written" : "Not processed");
     const statusClass = isDuplicate ? "dup" : p.success ? "ok" : (p.anon_id ? "warn" : "fail");
     const canReview = fileCount > 0;
