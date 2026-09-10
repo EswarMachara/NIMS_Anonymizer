@@ -4,13 +4,17 @@
 // Goes through the real flow -- select, then press Anonymize -- so the
 // button's own height is part of what gets measured.
 await setSelection([SELECTION], true);
-await new Promise((r) => setTimeout(r, 300));
+await new Promise((r) => setTimeout(r, 900));  // let the reveal scroll settle
 window.__selectedFrame = (() => {
   const d = document.documentElement;
   const a = document.querySelector(".anon-actions").getBoundingClientRect();
   const b = document.getElementById("anonymize-btn").getBoundingClientRect();
   return {
-    anonymizeOnScreen: b.height > 0 && b.bottom <= d.clientHeight + 1,
+    anonymizeOnScreen: b.height > 0 && b.bottom <= d.clientHeight + 1 && b.top >= 0,
+    destinationStillVisible: (() => {
+      const o = document.getElementById("out-box").getBoundingClientRect();
+      return o.top >= 0 && o.bottom <= d.clientHeight + 1;
+    })(),
     actionsInView: a.bottom <= d.clientHeight + 1,
     pageScrolls: d.scrollHeight > d.clientHeight + 1,
   };

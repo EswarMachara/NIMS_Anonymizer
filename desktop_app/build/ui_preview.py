@@ -179,6 +179,7 @@ def inspect(window):
     results["selectedFrame"] = window.evaluate_js("window.__selectedFrame || null")
     results["flow"] = window.evaluate_js("window.__flow || []")
     results["wording"] = window.evaluate_js("window.__wording || null")
+    results["spacing"] = window.evaluate_js("window.__spacing || null")
     results["driver_error"] = window.evaluate_js("window.__err")
     results["rejections"] = window.evaluate_js("window.__rejections || []")
     results["console"] = window.evaluate_js("window.__console || []")

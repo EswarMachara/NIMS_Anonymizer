@@ -379,6 +379,15 @@ async function setSelection(paths, isFolder) {
   els.anonymizeBtn?.classList.remove("hidden");
   els.resetBtn.disabled = false;
   setStep(1);
+
+  // With the layout given room to breathe, the button can sit below the
+  // fold of its own card on a maximized window -- and a primary action the
+  // operator has to hunt for is the same defect as one that is clipped.
+  // "nearest" scrolls the minimum needed, so the destination boxes the
+  // message tells them to check stay in view above it.
+  requestAnimationFrame(() => {
+    els.anonymizeBtn?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
 }
 
 // Native drag-and-drop bridge -- see main.py's _setup_drag_and_drop().
