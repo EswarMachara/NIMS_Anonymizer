@@ -216,7 +216,7 @@ body.ready .reveal { opacity: 1; transform: none; }
   display: flex;
   align-items: center;
   gap: clamp(1rem, 3vw, 2.4rem);
-  margin-bottom: clamp(1.1rem, 2.4vh, 1.9rem);
+  margin-bottom: clamp(0.8rem, 2vh, 1.5rem);
 }
 
 .workbench-title { min-width: 0; }
@@ -319,12 +319,12 @@ body.ready .reveal { opacity: 1; transform: none; }
 .session-inputs {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 1.1rem;
-  margin: 0 0 clamp(1.1rem, 2.2vh, 1.7rem);
+  gap: 0.8rem;
+  margin: 0 0 clamp(0.7rem, 1.6vh, 1.2rem);
 }
 
 .session-box {
-  padding: 1.15rem 1.25rem 1.25rem;
+  padding: 1rem 1.1rem 1.1rem;
   border: 1px solid rgba(10, 107, 111, 0.16);
   border-left: 4px solid #0a9f95;
   border-radius: 14px;
@@ -423,7 +423,7 @@ body.ready .reveal { opacity: 1; transform: none; }
 .anon-layout {
   display: grid;
   grid-template-columns: minmax(320px, 0.72fr) minmax(0, 1.28fr);
-  gap: clamp(1.8rem, 3.2vw, 2.6rem);
+  gap: clamp(1.5rem, 3vw, 2.2rem);
   /* stretch, not start: the two panes begin AND end level, instead of the
      shorter card floating against a taller neighbour. */
   align-items: stretch;
@@ -443,7 +443,7 @@ body.ready .reveal { opacity: 1; transform: none; }
 
 /* Push the action row to the bottom of its card so both columns finish on
    the same line however much content sits above it. */
-.anon-tool-card .anon-actions { margin-top: auto; padding-top: clamp(1.2rem, 2.4vh, 2rem); }
+.anon-tool-card .anon-actions { margin-top: auto; padding-top: clamp(0.8rem, 1.8vh, 1.6rem); }
 .anon-intro-card .layout-explainer { margin-bottom: 0; }
 
 .panel-card {
@@ -459,11 +459,11 @@ body.ready .reveal { opacity: 1; transform: none; }
   background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 16px 45px rgba(15, 23, 42, 0.07);
   border-radius: 24px;
-  padding: clamp(1.5rem, 2.6vh, 2.2rem) clamp(1.5rem, 2.2vw, 2.2rem);
+  padding: clamp(1.1rem, 2.2vh, 2rem) clamp(1.2rem, 2vw, 2rem);
   min-height: 0;
 }
 
-.anon-card-head { margin-bottom: 0.9rem; }
+.anon-card-head { margin-bottom: 0.3rem; }
 
 .anon-card-head h2 {
   margin: 0.2rem 0 0.4rem;
@@ -1237,7 +1237,7 @@ body.ready .reveal { opacity: 1; transform: none; }
    Nothing is hidden: the operator still sees every control, just tighter.
    Two breakpoints so the change is gradual instead of one hard jump. */
 
-@media (max-height: 860px) {
+@media (max-height: 940px) {
   /* The two session boxes are the biggest fixed block in the tool card, so
      they collapse to a single compact row each: label and state on one
      line, path and button on the next, explanatory hint dropped (it is
@@ -1290,7 +1290,7 @@ body.ready .reveal { opacity: 1; transform: none; }
    monitor. Each pass drops the least load-bearing thing still on screen. */
 
 /* Pass 1: prose that only restates what is already visible beside it. */
-@media (max-height: 860px) {
+@media (max-height: 940px) {
   /* "Choose a folder, choose individual files, or drag them in below."
      directly above a drop zone that says exactly that. */
   .anon-tool-card > .anon-card-head p { display: none; }
@@ -1299,7 +1299,7 @@ body.ready .reveal { opacity: 1; transform: none; }
 }
 
 /* Pass 2: the decorative and the merely helpful. */
-@media (max-height: 800px) {
+@media (max-height: 880px) {
   .upload-icon { display: none; }
   .session-box { padding: 0.8rem 0.9rem 0.85rem; }
   .package-upload-actions { margin: 0.55rem 0; }
@@ -1311,7 +1311,7 @@ body.ready .reveal { opacity: 1; transform: none; }
 /* Pass 3: structural padding. Nothing further is removed -- from here the
    frame just closes up. Sized to clear a 1366x768 laptop, which is what a
    ward workstation most often is. */
-@media (max-height: 780px) {
+@media (max-height: 820px) {
   /* Tighter still: drop the explanatory prose that is redundant once the
      diagram beside it is visible, and let the tree take what is left. */
   .anon-intro-card > .anon-card-head p { display: none; }
@@ -1325,7 +1325,7 @@ body.ready .reveal { opacity: 1; transform: none; }
   .workflow-steps li { padding: 0.35rem 0.45rem; }
 }
 
-@media (max-height: 740px) {
+@media (max-height: 800px) {
   .anon-workbench { padding-top: 0.6rem; padding-bottom: 0.6rem; }
   .workbench-head { margin-bottom: 0.5rem; }
   .upload-tile { min-height: 84px; padding: 0.7rem 1rem; }
