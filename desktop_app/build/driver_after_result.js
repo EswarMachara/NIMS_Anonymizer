@@ -1,10 +1,22 @@
 // The state the operator is actually left in: a finished batch run. The
 // result banner, the per-patient table and the action row all appear AFTER
 // processing, so a frame that fits before anonymizing proves nothing.
-state.outputDir = "C:\\Users\\macha\\Downloads\\KFRE";
-await refreshSession();
-await runProcess(["C:\\Users\\macha\\Desktop\\NIMS\\KFRE"], true);
-await new Promise((r) => setTimeout(r, 500));
+// Goes through the real flow -- select, then press Anonymize -- so the
+// button's own height is part of what gets measured.
+await setSelection([SELECTION], true);
+await new Promise((r) => setTimeout(r, 300));
+window.__selectedFrame = (() => {
+  const d = document.documentElement;
+  const a = document.querySelector(".anon-actions").getBoundingClientRect();
+  const b = document.getElementById("anonymize-btn").getBoundingClientRect();
+  return {
+    anonymizeOnScreen: b.height > 0 && b.bottom <= d.clientHeight + 1,
+    actionsInView: a.bottom <= d.clientHeight + 1,
+    pageScrolls: d.scrollHeight > d.clientHeight + 1,
+  };
+})();
+document.getElementById("anonymize-btn").click();
+await new Promise((r) => setTimeout(r, 900));
 
 const doc = document.documentElement;
 const card = document.querySelector(".anon-tool-card");

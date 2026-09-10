@@ -1,18 +1,22 @@
 """
 Dev-only: render the workbench in the SAME WebView2 engine the app ships
-with, drive it with a real engine payload, then assert on the DOM it
-produced.
+with, drive it, then assert on the DOM it produced.
 
 Catches the class of bug a Python-side test cannot: a status class that
 never got CSS, a note row that renders empty, a session panel that does not
 repaint. Runs the real web/app.js -- nothing about the rendering is
 reimplemented here.
 
-    ui_preview.py [payload.json] [driver.js]
+The bridge is a real pywebview js_api, not a JavaScript stub. An earlier
+version assigned window.pywebview.api by hand and pywebview overwrote it
+during its own startup, so calls silently became "is not a function"
+partway through a run -- the harness reported a frozen UI that was entirely
+its own doing. Going through the real bridge also means the logic under
+test (describe_session, detect_study, suggest_destination) is the REAL
+backend; only what a test genuinely cannot do is substituted: native file
+dialogs, and the anonymization run itself.
 
-payload.json is what the stubbed process_package returns, and is exposed to
-the driver as `PAYLOAD`. Without a driver, the default one renders it as a
-batch result. Both arguments are optional.
+    ui_preview.py [payload.json] [driver.js] [WxH]
 """
 
 import json
@@ -24,12 +28,18 @@ import time
 import webview
 
 BUILD_DIR = os.path.dirname(os.path.abspath(__file__))
-WEB_DIR = os.path.join(os.path.dirname(BUILD_DIR), "web")
+APP_DIR = os.path.dirname(BUILD_DIR)
+WEB_DIR = os.path.join(APP_DIR, "web")
 PREVIEW = os.path.join(WEB_DIR, "_ui_preview.html")
+
+sys.path.insert(0, APP_DIR)
+from backend import engine  # noqa: E402
 
 args = sys.argv[1:]
 payload_path = next((a for a in args if a.lower().endswith(".json")), None)
 driver_path = next((a for a in args if a.lower().endswith(".js")), None)
+size = next((a for a in args if re.fullmatch(r"\d+x\d+", a)), "1500x950")
+WIN_W, WIN_H = (int(v) for v in size.split("x"))
 
 payload = json.load(open(payload_path, encoding="utf-8")) if payload_path else {
     "success": True, "batch": True, "study": "kfre", "patients": [],
@@ -40,74 +50,100 @@ payload = json.load(open(payload_path, encoding="utf-8")) if payload_path else {
 driver = open(driver_path, encoding="utf-8").read() if driver_path else \
     'renderBatchResult(PAYLOAD, "KFRE");'
 
-# Window size as WxH, so a layout claim can be checked at the short viewports
-# that actually break it rather than only at the one this machine happens to
-# have.
-size = next((a for a in args if re.fullmatch(r"\d+x\d+", a)), "1500x950")
-WIN_W, WIN_H = (int(v) for v in size.split("x"))
+# Where a stubbed "Browse folder" pretends the operator navigated to.
+PICKED_OUTPUT_DIR = os.path.join(os.environ.get("TEMP", "."), "nims_preview_chosen_output")
+
+# A sample selection the drivers can use without hardcoding a machine path.
+SELECTION = next((a for a in args if os.path.isdir(a)), None) or os.path.join(
+    os.environ.get("TEMP", "."), "nims_flow", "sample_NIMS", "KFRE")
+os.makedirs(SELECTION, exist_ok=True)
+
+
+class PreviewApi:
+    """Real backend for everything that can be exercised for real."""
+
+    def get_app_info(self):
+        return engine.get_app_info()
+
+    def describe_session(self, mapping_csv=None, output_dir=None, study="egfr"):
+        return engine.describe_session(mapping_csv or None, output_dir or None, study)
+
+    def detect_study(self, paths, is_folder):
+        return {"success": True,
+                "study": engine.detect_study_for_selection(list(paths or []), bool(is_folder))}
+
+    def suggest_destination(self, paths, is_folder):
+        return {"success": True,
+                "path": engine.suggest_output_dir(list(paths or []), bool(is_folder))}
+
+    # -- substituted: a test cannot open a native dialog, and must not
+    #    actually anonymize anything --
+    def pick_output_folder(self):
+        os.makedirs(PICKED_OUTPUT_DIR, exist_ok=True)
+        return {"picked": True, "path": PICKED_OUTPUT_DIR}
+
+    def pick_mapping_csv(self):
+        return {"picked": True, "path": os.path.join(PICKED_OUTPUT_DIR, "carried_over.csv")}
+
+    def pick_folder(self):
+        return {"picked": False}
+
+    def pick_files(self):
+        return {"picked": False}
+
+    def process_package(self, paths, is_folder, study_override=None,
+                        mapping_csv=None, output_dir=None):
+        return payload
+
+    def get_crosscheck_manifest(self, preview_pairs):
+        return {"success": True, "images": [], "reports": [], "metadata": []}
+
+    def reveal_in_explorer(self, path):
+        return {"success": True}
+
 
 index = open(os.path.join(WEB_DIR, "index.html"), encoding="utf-8").read()
 body = re.search(r"<body>(.*)</body>", index, re.S).group(1)
 body = body.replace('<script src="app.js"></script>', "")
 
-app_info = {
-    "hospital_code": "NIMS",
-    "hospital_name": "Nizam's Institute of Medical Sciences (NIMS), Hyderabad",
-    "app_data_dir": r"C:\Users\clinic\AppData\Local\TANUH-Renal-Anonymizer",
-    "egfr_mapping_csv": "", "kfre_mapping_csv": "",
-    "egfr_output_dir": "", "kfre_output_dir": "",
-}
-
-# describe_session is answered the way the real backend would: per study, so
-# a harness cannot accidentally hide the very bug it is checking for.
-session_js = r"""
-  describe_session: async (mappingCsv, outputDir, study) => {
-    const base = outputDir || "C:\\AppData\\TANUH-Renal-Anonymizer";
-    const name = study === "kfre" ? "KFRE" : "eGFR";
-    window.__sessionCalls = (window.__sessionCalls || []).concat(study);
-    return {
-      study, mapping_csv: mappingCsv || (base + "\\" + name + "_anony_Mapping.csv"),
-      mapping_csv_exists: false, mapping_csv_is_default: !mappingCsv,
-      mapping_csv_beside_output: !mappingCsv && !!outputDir,
-      existing_patients: 0, existing_ids: 0, continuing: false,
-      output_dir: base + "\\Anonymized_" + name,
-      output_is_default: !outputDir, processed_files: 0,
-      ledger_path: "", error: null,
-    };
-  },
-"""
-
-open(PREVIEW, "w", encoding="utf-8").write(f"""<link rel="stylesheet" href="style.css">
+# The charset matters: the preview page takes index.html's BODY only, so
+# without this it inherits no encoding and mangles every non-ASCII
+# character the UI renders -- the ellipsis in a shortened path included.
+open(PREVIEW, "w", encoding="utf-8").write(f"""<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
 {body}
 <script>
 window.PAYLOAD = {json.dumps(payload)};
-window.pywebview = {{ api: {{
-  get_app_info: async () => ({json.dumps(app_info)}),
-  {session_js}
-  detect_study: async (paths, isFolder) => ({{
-    success: true,
-    study: (paths || []).some(p => /\\.dcm$/i.test(p)) || /egfr/i.test((paths || [])[0] || "")
-      ? "egfr" : "kfre",
-  }}),
-  process_package: async () => window.PAYLOAD,
-}} }};
+window.SELECTION = {json.dumps(SELECTION)};
+const SELECTION = window.SELECTION;
+window.__err = null;
+window.__rejections = [];
+window.__console = [];
+window.addEventListener('error', e => {{ window.__err = window.__err || String(e.message); }});
+window.addEventListener('unhandledrejection', e => {{
+  window.__rejections.push(String((e.reason && (e.reason.stack || e.reason.message)) || e.reason));
+}});
+(function () {{
+  const real = console.error;
+  console.error = function (...a) {{ window.__console.push(a.map(String).join(' ')); real.apply(console, a); }};
+}})();
 </script>
 <script src="app.js"></script>
 <script>
-window.__err = null;
-window.addEventListener('error', e => {{ window.__err = window.__err || String(e.message); }});
 // A flag, not a Promise: pywebview's evaluate_js does not await promises,
 // so polling for a plain boolean is the only reliable way to know the
 // driver has finished. Reading the DOM before it has is how a harness
 // reports a passing UI that never actually rendered.
 window.__done = false;
-(async () => {{
-  try {{
-    await refreshSession();
-    {driver}
-  }} catch (e) {{ window.__err = String(e && e.stack || e); }}
-  window.__done = true;
-}})();
+window.addEventListener('pywebviewready', () => {{
+  (async () => {{
+    try {{
+      await refreshSession();
+      {driver}
+    }} catch (e) {{ window.__err = String(e && e.stack || e); }}
+    window.__done = true;
+  }})();
+}});
 </script>
 """)
 
@@ -115,7 +151,7 @@ results = {}
 
 
 def inspect(window):
-    deadline = time.time() + 30
+    deadline = time.time() + 40
     while not window.evaluate_js("window.__done === true") and time.time() < deadline:
         time.sleep(0.1)
     if not window.evaluate_js("window.__done === true"):
@@ -127,7 +163,6 @@ def inspect(window):
     results["banner"] = window.evaluate_js("document.getElementById('result-banner').innerText")
     results["summary"] = window.evaluate_js("document.getElementById('batch-summary').innerText")
     results["csv_hint"] = window.evaluate_js("document.getElementById('csv-hint').innerText")
-    results["describe_session_studies"] = window.evaluate_js("window.__sessionCalls || []")
     results["rows"] = window.evaluate_js("""
       Array.from(document.querySelectorAll('#batch-tbody tr')).map(tr => ({
         cls: tr.className,
@@ -141,14 +176,26 @@ def inspect(window):
     results["trace"] = window.evaluate_js("window.__trace || []")
     results["frame"] = window.evaluate_js("window.__frame || null")
     results["after"] = window.evaluate_js("window.__after || null")
+    results["selectedFrame"] = window.evaluate_js("window.__selectedFrame || null")
+    results["flow"] = window.evaluate_js("window.__flow || []")
     results["driver_error"] = window.evaluate_js("window.__err")
+    results["rejections"] = window.evaluate_js("window.__rejections || []")
+    results["console"] = window.evaluate_js("window.__console || []")
     window.destroy()
 
 
-win = webview.create_window("UI preview", url=PREVIEW, width=WIN_W, height=WIN_H)
+win = webview.create_window("UI preview", url=PREVIEW, js_api=PreviewApi(),
+                            width=WIN_W, height=WIN_H)
 webview.start(inspect, win)
 
 if os.path.exists(PREVIEW):
     os.remove(PREVIEW)
 
-print(json.dumps(results, indent=2))
+# Written to a file rather than printed: this tool reports paths, which on
+# Windows contain characters the console encoding mangles (a shortened path
+# carries an ellipsis, and stdout here is cp1252). Fighting that produced
+# several rounds of unreadable output that looked like UI bugs.
+RESULT_PATH = os.path.join(os.environ.get("TEMP", "."), "ui_preview_result.json")
+with open(RESULT_PATH, "w", encoding="utf-8") as f:
+    json.dump(results, f, indent=2, ensure_ascii=False)
+print(RESULT_PATH)

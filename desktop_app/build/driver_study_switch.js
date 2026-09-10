@@ -7,11 +7,15 @@ const snap = (label) => window.__trace.push({
   out: document.getElementById("out-path").innerText,
 });
 
-state.outputDir = "C:\\Users\\macha\\Downloads\\KFRE";
+state.outputDir = SELECTION.replace(/[\/][^\/]+$/, "");
+state.outputSource = "chosen";
 await refreshSession();
 snap("output chosen, nothing selected yet");
 
-await runProcess(["C:\\Users\\macha\\Desktop\\NIMS\\KFRE"], true);
+// The app reaches runProcess only via setSelection, so the driver must too
+// -- calling runProcess directly skips the detection that setSelection does
+// and would be testing a path the UI no longer has.
+await setSelection([SELECTION], true);
 snap("after handing in a KFRE folder on Auto-detect");
 
 setStudyOverride("egfr");

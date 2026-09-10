@@ -173,6 +173,12 @@
               <div class="progress-bar"></div>
             </div>
 
+            <!-- Selecting no longer starts the run. The destination and the
+                 mapping CSV are settled from the selection first, and this
+                 is the moment the operator gets to check or change them
+                 before anything is written. -->
+            <button type="button" class="btn-premium anonymize-btn hidden" id="anonymize-btn">Anonymize</button>
+
             <!-- Study selection lives with the selection controls it
                  affects, rather than in the explanatory pane opposite. -->
             <div class="study-picker">

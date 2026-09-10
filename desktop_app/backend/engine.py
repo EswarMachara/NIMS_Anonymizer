@@ -227,6 +227,59 @@ def detect_study_for_selection(paths: List[str], is_folder: bool) -> str:
     return "kfre"
 
 
+def _is_writable_dir(path: str) -> bool:
+    """Actually try to write, rather than trust os.access -- which on
+    Windows reports the read-only ATTRIBUTE, not whether the ACL lets this
+    user create a file. A read-only study share would otherwise be
+    suggested as a destination and fail halfway through the run."""
+    probe = os.path.join(path, f".tanuh_write_probe_{os.getpid()}")
+    try:
+        with open(probe, "w"):
+            pass
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+def suggest_output_dir(paths: List[str], is_folder: bool) -> Optional[str]:
+    """
+    Where output should default to for this selection: the folder that
+    CONTAINS it, so the anonymized folder and the mapping CSV land as
+    SIBLINGS of the input rather than somewhere under the user profile.
+
+        Downloads/sample_NIMS/            <- suggested destination
+        ├── KFRE/                         <- what was selected
+        ├── KFRE_anony_Mapping.csv        <- mapping, written here
+        └── Anonymized_KFRE/              <- output, written here
+
+    Keeping all three together is what makes a study folder self-contained:
+    the operator can see at a glance which mapping belongs to which data,
+    and carrying the folder to another machine carries the whole session.
+
+    The sibling layout also satisfies anon_common.validate_mapping_csv_
+    location(), which refuses a mapping resolving inside either the input
+    tree or the shareable output folder. A sibling is neither.
+
+    Returns None when there is no sensible suggestion -- a drive root, a
+    parent that no longer exists, or one this user cannot write to -- and
+    the caller then keeps whatever default was already in effect.
+    """
+    if not paths:
+        return None
+    first = os.path.abspath(paths[0])
+    # For a file selection, the "input" is the folder holding the files, so
+    # the destination is that folder's parent -- same result as selecting
+    # the folder itself, which is what makes the two selection modes agree.
+    base = first if (is_folder and os.path.isdir(first)) else os.path.dirname(first)
+    parent = os.path.dirname(base)
+    if not parent or parent == base or not os.path.isdir(parent):
+        return None  # drive root, or the selection had no containing folder
+    if not _is_writable_dir(parent):
+        return None
+    return parent
+
+
 def stage_selected_files(file_paths: List[str]) -> str:
     """
     "Choose Files" mode: the user multi-selected individual files rather

@@ -150,6 +150,18 @@ class Api:
         except Exception as exc:  # noqa: BLE001 -- a failed guess must not block the run
             return {"success": False, "errors": [str(exc)]}
 
+    def suggest_destination(self, paths, is_folder):
+        """Where output should default to for this selection: beside it, so
+        the anonymized folder and the mapping CSV sit as siblings of the
+        input. Returns path None when there is no sensible suggestion."""
+        try:
+            return {
+                "success": True,
+                "path": engine.suggest_output_dir(list(paths or []), bool(is_folder)),
+            }
+        except Exception as exc:  # noqa: BLE001 -- a failed suggestion keeps the current default
+            return {"success": False, "errors": [str(exc)]}
+
     def pick_output_folder(self):
         """Choose where anonymized output is written (a per-study subfolder
         is still created inside it, so two studies can share one

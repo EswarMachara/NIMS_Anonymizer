@@ -21,6 +21,7 @@ const els = {
   approveBtn: document.getElementById("approve-btn"),
   chooseFolderBtn: document.getElementById("choose-folder-btn"),
   chooseFilesBtn: document.getElementById("choose-files-btn"),
+  anonymizeBtn: document.getElementById("anonymize-btn"),
   packageTile: document.getElementById("package-tile"),
   progressTrack: document.getElementById("progress-track"),
   csvState: document.getElementById("csv-state"),
@@ -72,7 +73,16 @@ let state = {
   processing: false,
   appDataDir: null, // shared parent of both mapping CSVs + both output folders (see loadAppInfo())
   mappingCsv: null, // operator-chosen ID-mapping CSV; null = app-data default
-  outputDir: null,  // operator-chosen output destination; null = app-data default
+  outputDir: null,  // output destination in use; null = app-data default
+  // Where outputDir came from, which decides whether a later selection may
+  // move it. "default" and "auto" are ours to change; "chosen" is the
+  // operator's and is never overwritten behind their back.
+  outputSource: "default", // "default" | "auto" | "chosen"
+  // What has been selected but not yet anonymized. Selecting used to start
+  // the run immediately, which left no moment to check the destination or
+  // load an existing mapping CSV first -- the two things most worth getting
+  // right before anything is written.
+  selection: null, // { paths: string[], isFolder: bool, label: string }
 };
 
 function escapeHTML(value) {
@@ -83,6 +93,19 @@ function escapeHTML(value) {
 
 function basename(p) {
   return String(p || "").split(/[\\/]/).pop();
+}
+
+// Absolute paths are too long to read at a glance in a narrow box, and the
+// part that identifies one is its tail. Show the last two segments -- the
+// containing folder plus the thing itself -- which is what makes the
+// sibling layout legible at a glance: "sample_NIMS\Anonymized_KFRE" beside
+// "sample_NIMS\KFRE_anony_Mapping.csv". The full path stays on the
+// element's title, and "Show output folder" opens the real one, so nothing
+// is actually hidden.
+function shortPath(full, keep = 2) {
+  const parts = String(full || "").split(/[\\/]/).filter(Boolean);
+  if (parts.length <= keep) return String(full || "");
+  return "…\\" + parts.slice(-keep).join("\\");
 }
 
 function setStep(n) {
@@ -135,12 +158,26 @@ requestAnimationFrame(() => document.body.classList.add("ready"));
 function renderSession(info) {
   if (!info) return;
   const csvChosen = !info.mapping_csv_is_default;
-  els.csvPath.textContent = info.mapping_csv || "";
-  els.outPath.textContent = info.output_dir || "";
+  els.csvPath.textContent = shortPath(info.mapping_csv);
+  els.csvPath.title = info.mapping_csv || "";
+  els.outPath.textContent = shortPath(info.output_dir);
+  els.outPath.title = info.output_dir || "";
   els.csvClearBtn.classList.toggle("hidden", !csvChosen);
   els.outClearBtn.classList.toggle("hidden", info.output_is_default);
-  els.outState.textContent = info.output_is_default ? "Using default" : "Custom";
-  els.outState.className = `session-state ${info.output_is_default ? "" : "is-custom"}`;
+
+  // Three states, not two: a destination derived from what was selected is
+  // neither the app-data default nor something the operator chose, and
+  // labelling it "Custom" would imply they had already made that decision.
+  if (info.output_is_default) {
+    els.outState.textContent = "Using default";
+    els.outState.className = "session-state";
+  } else if (state.outputSource === "auto") {
+    els.outState.textContent = "Beside your input";
+    els.outState.className = "session-state is-good";
+  } else {
+    els.outState.textContent = "Custom";
+    els.outState.className = "session-state is-custom";
+  }
 
   // The distinction that actually matters: is this a continuing ID space
   // (returning patients keep their existing ID, and new IDs are checked
@@ -219,11 +256,16 @@ els.outBrowseBtn?.addEventListener("click", async () => {
   const picked = await window.pywebview.api.pick_output_folder();
   if (picked?.picked) {
     state.outputDir = picked.path;
+    // Now the operator's decision, so a later selection must not move it.
+    state.outputSource = "chosen";
     refreshSession();
   }
 });
 els.outClearBtn?.addEventListener("click", () => {
+  // Back to the app-data default -- and back under our control, so
+  // selecting another folder may once again put the output beside it.
   state.outputDir = null;
+  state.outputSource = "default";
   refreshSession();
 });
 
@@ -275,13 +317,74 @@ async function loadAppInfo() {
 
 els.chooseFolderBtn?.addEventListener("click", async () => {
   const picked = await window.pywebview.api.pick_folder();
-  if (picked?.picked) runProcess(picked.paths, true);
+  if (picked?.picked) setSelection(picked.paths, true);
 });
 
 els.chooseFilesBtn?.addEventListener("click", async () => {
   const picked = await window.pywebview.api.pick_files();
-  if (picked?.picked) runProcess(picked.paths, false);
+  if (picked?.picked) setSelection(picked.paths, false);
 });
+
+els.anonymizeBtn?.addEventListener("click", () => {
+  if (state.selection) runProcess(state.selection.paths, state.selection.isFolder);
+});
+
+/**
+ * Take a selection WITHOUT starting the run.
+ *
+ * Selecting used to anonymize immediately, which left no moment to do the
+ * two things most worth doing first: check where the output and the
+ * mapping CSV are going, and load an existing CSV so returning patients
+ * keep their IDs. By the time the operator saw either, the files were
+ * already written.
+ *
+ * So this settles everything the run depends on and then stops, leaving
+ * the Anonymize button as the only thing left to do.
+ */
+async function setSelection(paths, isFolder) {
+  if (state.processing) return;
+  state.selection = {
+    paths,
+    isFolder,
+    label: isFolder ? basename(paths[0]) : `${paths.length} file(s)`,
+  };
+
+  // Settle the study first: it decides which mapping CSV and which output
+  // subfolder the run will use, so the paths shown next must follow it.
+  try {
+    const detected = await window.pywebview.api.detect_study(paths, isFolder);
+    if (detected?.success && detected.study) state.detectedStudy = detected.study;
+  } catch (err) {
+    console.error("detect_study failed", err); // a missing label must not block selecting
+  }
+
+  // Put the output beside the input, unless the operator has already
+  // chosen a destination themselves -- theirs is never overwritten.
+  if (state.outputSource !== "chosen") {
+    try {
+      const suggested = await window.pywebview.api.suggest_destination(paths, isFolder);
+      if (suggested?.success && suggested.path) {
+        state.outputDir = suggested.path;
+        state.outputSource = "auto";
+      }
+    } catch (err) {
+      console.error("suggest_destination failed", err); // keep whatever default was in effect
+    }
+  }
+
+  await refreshSession();
+
+  els.packageTile?.classList.add("tile-has-file");
+  setStatus(
+    isFolder
+      ? `Selected: ${state.selection.label}. Check the destination below, then Anonymize.`
+      : `Selected ${state.selection.label}. Check the destination below, then Anonymize.`,
+    true,
+  );
+  els.anonymizeBtn?.classList.remove("hidden");
+  els.resetBtn.disabled = false;
+  setStep(1);
+}
 
 // Native drag-and-drop bridge -- see main.py's _setup_drag_and_drop().
 // Python calls these two globals directly via evaluate_js(); they are not
@@ -295,7 +398,7 @@ window.__anonOnDropResolved = function (paths, errorMessage) {
     setStatus(errorMessage, false);
     return;
   }
-  if (paths && paths.length) runProcess(paths, false);
+  if (paths && paths.length) setSelection(paths, false);
 };
 
 // Everything a run produces -- the banner, the per-patient table, the
@@ -326,24 +429,10 @@ async function runProcess(paths, isFolder) {
     : `Anonymizing ${paths.length} file(s).`;
   els.statusCard.classList.add("processing");
   els.progressTrack?.classList.remove("hidden");
+  if (els.anonymizeBtn) els.anonymizeBtn.disabled = true;
   els.resultBanner.classList.add("hidden");
   els.previewGrid.classList.add("hidden");
   [els.resetBtn, els.revealBtn, els.approveBtn].forEach((b) => b && (b.disabled = true));
-
-  // Settle which study this is BEFORE anything is written, and repaint the
-  // session panel, so the mapping CSV and output paths on screen are the
-  // ones about to be used. The engine reaches the same answer either way;
-  // asking first is only so the operator is not shown the wrong study's
-  // filenames while the run they cannot cancel is under way.
-  try {
-    const detected = await window.pywebview.api.detect_study(paths, isFolder);
-    if (detected?.success && detected.study) {
-      state.detectedStudy = detected.study;
-      await refreshSession();
-    }
-  } catch (err) {
-    console.error("detect_study failed", err); // never block the run over a label
-  }
 
   try {
     const result = await window.pywebview.api.process_package(
@@ -358,6 +447,7 @@ async function runProcess(paths, isFolder) {
     renderResult({ success: false, errors: [`Unexpected error: ${err}`] });
   } finally {
     state.processing = false;
+    if (els.anonymizeBtn) els.anonymizeBtn.disabled = false;
     els.progressTrack?.classList.add("hidden");
   }
 }
@@ -819,8 +909,16 @@ els.approveBtn?.addEventListener("click", () => {
 els.resetBtn?.addEventListener("click", () => {
   state.lastResult = null;
   document.querySelectorAll(".anon-layout > .panel-card").forEach((c) => { c.scrollTop = 0; });
-  // Nothing is selected any more, so nothing has been detected either.
+  // Nothing is selected any more, so nothing has been detected either --
+  // and a destination derived from that selection has to go with it. One
+  // the operator chose themselves stays.
   state.detectedStudy = null;
+  state.selection = null;
+  if (state.outputSource === "auto") {
+    state.outputDir = null;
+    state.outputSource = "default";
+  }
+  els.anonymizeBtn?.classList.add("hidden");
   refreshSession();
   ccState = { tab: "images", manifest: null, subject: "", observer: null };
   els.batchResults.classList.add("hidden");

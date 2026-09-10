@@ -679,7 +679,14 @@ body.ready .reveal { opacity: 1; transform: none; }
   border-style: solid;
   background: linear-gradient(135deg, #f0fdfa 0%, #f6fbfb 100%);
   box-shadow: 0 0 0 3px rgba(20, 134, 140, 0.1);
+  /* Once a package is selected the big drop target has done its job, and
+     the space is better spent on what comes next -- the destination to
+     check and the Anonymize button. It shrinks rather than disappears, so
+     dropping a different folder is still possible. */
+  min-height: clamp(76px, 11vh, 130px);
 }
+
+.upload-tile.tile-has-file .upload-title { font-size: 0.94rem; }
 
 .upload-icon {
   width: 46px;
@@ -791,6 +798,18 @@ body.ready .reveal { opacity: 1; transform: none; }
   font-size: 0.86rem;
   text-align: center;
 }
+
+/* The primary action once something is selected. Full width and below the
+   status line, so after choosing a folder the eye lands on the one thing
+   left to do, and so it cannot be mistaken for another way to browse. */
+.anonymize-btn {
+  width: 100%;
+  margin-top: 0.7rem;
+  padding: 0.85rem 1.4rem;
+  font-size: 0.98rem;
+}
+
+.anonymize-btn:not(:disabled) { box-shadow: 0 8px 20px rgba(15, 154, 135, 0.28); }
 
 .anon-status-card.has-file { color: var(--text-primary); text-align: left; }
 .anon-status-card.processing { color: var(--teal-dark); font-weight: 700; }
@@ -1298,6 +1317,9 @@ body.ready .reveal { opacity: 1; transform: none; }
   .upload-tile { min-height: 84px; padding: 0.7rem 1rem; }
   .study-picker { margin-top: 0.5rem; }
   .anon-tool-card .anon-actions { padding-top: 0.6rem; }
+  /* Appears only once something is selected, so it is the last thing added
+     to an already-tight card -- keep it prominent but not tall. */
+  .anonymize-btn { margin-top: 0.5rem; padding: 0.62rem 1.2rem; }
 }
 
 
