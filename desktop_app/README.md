@@ -28,13 +28,14 @@ constants and the logo file, not the rest of the app).
 4. **Recognises files it has already anonymized.** A returning patient's
    CR No is enough to reuse their Anonymized ID, but it cannot tell a
    follow-up visit apart from the same documents being handed over twice —
-   both look like "a patient I know". Every source file is hashed
-   (SHA-256) and checked against a ledger that travels with the mapping
-   CSV, so a re-submitted package is reported as **already done** and left
-   untouched rather than silently redone and overwritten. A package with
-   some old files and some new is processed, and says which was which.
-   See the "Repeat-submission ledger" section of `anon_common.py` for why
-   this is a content hash rather than a report date.
+   both look like "a patient I know". Each patient's row in the mapping CSV
+   carries a `Source Fingerprint`: a SHA-256 over the exact set of files
+   they were last anonymized from. Hand the same package in again and it is
+   reported as **already done** and left untouched, rather than silently
+   redone and the verified output overwritten. Add a file and the set is
+   different, so the patient is processed again in full. See
+   `anon_common.fingerprint_files()` for why it is a content hash rather
+   than a report date.
 5. **Preview output** — original files vs. the anonymized copy, side by
    side, before you rely on the result.
 6. **Approve** — marks the review as done. Deleting the original source
@@ -51,20 +52,14 @@ back to a real patient) and the accumulated anonymized output live under:
 ```
 %LOCALAPPDATA%\TANUH-Renal-Anonymizer\
 ├── eGFR_anony_Mapping.csv
-├── eGFR_anony_Mapping_processed_files.json
 ├── KFRE_anony_Mapping.csv
-├── KFRE_anony_Mapping_processed_files.json
 ├── Anonymized_eGFR\<AnonID>\...
 └── Anonymized_KFRE\<AnonID>\...
 ```
 
-Each `_processed_files.json` is the repeat-submission ledger for the CSV it
-sits beside: which file contents have already been anonymized, and under
-which Anonymized ID. **Move the two together.** A mapping CSV carried to
-another machine without its ledger still reuses IDs correctly, but stops
-recognising re-submitted files — the session panel says so when the ledger
-is missing. It records original filenames, so treat it as confidential in
-exactly the same way as the CSV.
+The mapping CSV is the **whole** session memory — the ID mapping and, in
+its `Source Fingerprint` column, what each patient was last anonymized
+from. One file to carry between machines, and nothing to forget.
 
 (`~/.local/share/TANUH-Renal-Anonymizer/` on macOS/Linux, used only for
 development/testing on this machine — see `backend/engine.get_app_data_dir()`.)

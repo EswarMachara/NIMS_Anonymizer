@@ -77,7 +77,7 @@ def scenario_same_files_twice(study, src):
     s1 = first["summary"]
     print(f"  run 1: {s1['succeeded']}/{s1['total']} patient(s) in {t_first:.1f}s -> {verdicts(first)}")
     check("run 1 succeeds", first["success"], str(first.get("errors")))
-    check("run 1 sees no repeats", s1["skipped_duplicates"] == 0 and s1["partial_repeats"] == 0)
+    check("run 1 sees no repeats", s1["skipped_duplicates"] == 0 and s1["rewritten_repeats"] == 0)
     check("run 1 mints a new ID per patient", s1["new_ids"] == s1["total"], f"new={s1['new_ids']}")
 
     after_first = snapshot(dest)
@@ -124,11 +124,11 @@ def scenario_deleted_output(study, src, dest):
     check("the deleted output is back", os.path.exists(victim))
 
 
-def scenario_partial_followup(study, src):
+def scenario_added_file(study, src):
     """A returning patient whose folder holds last visit's files PLUS a new
     one. This is the shape a real follow-up actually arrives in -- the
     operator hands over the whole patient folder again -- so it must be
-    processed, not skipped, and the repeat must be reported as partial."""
+    processed, not skipped."""
     print(f"\n=== {study.upper()}: known patient, one genuinely new report ===")
     import pymupdf as fitz
 
@@ -168,68 +168,100 @@ def scenario_partial_followup(study, src):
     v = verdicts(result)
     print(f"  -> {v}")
     check("run succeeds", result["success"], str(result.get("errors")))
-    check("the patient with new material is reported as a partial repeat",
-          "partial" in v, str(v))
+    # The fingerprint covers the whole SET of a patient's files, so adding
+    # one makes the set new: that patient is processed again in full rather
+    # than skipped. Redundant for the files that had not changed, and
+    # correct -- which is the trade for keeping this in one CSV column
+    # instead of a per-file list.
+    check("the patient with new material is NOT skipped", "new" in v, str(v))
     check("the other patients are still skipped as duplicates",
           v.count("duplicate") == seeded - 1, f"{v.count('duplicate')} of {seeded - 1}")
-
-    partial = [p for p in result["patients"] if (p.get("repeat") or {}).get("verdict") == "partial"]
-    if partial:
-        r = partial[0]["repeat"]
-        print(f"     {r['message']}")
-        check("the message counts old and new files separately",
-              r["already"] > 0 and r["fresh"] > 0, f"already={r['already']} fresh={r['fresh']}")
+    reprocessed = [p for p in result["patients"] if (p.get("repeat") or {}).get("verdict") == "new"]
+    if reprocessed:
         check("the new report was actually written",
-              any("FOLLOWUP_" in os.path.basename(p["original"]) for p in partial[0]["preview_pairs"]))
+              any("FOLLOWUP_" in os.path.basename(p["original"])
+                  for p in reprocessed[0]["preview_pairs"]))
     shutil.rmtree(staged, ignore_errors=True)
 
 
-def scenario_wrong_mapping_csv(study, src):
-    print(f"\n=== {study.upper()}: a DIFFERENT mapping CSV (operator picked the wrong file) ===")
+def scenario_duplicate_subject(study, src):
+    """The same files recorded against two different patients in one
+    mapping -- a duplicate subject in the anonymized dataset, which must be
+    reported rather than skipped or silently accepted."""
+    print(f"\n=== {study.upper()}: the same files already under another patient ===")
     dest = fresh_dest(f"{study}_conflict")
     first = run(study, src, dest)
     check("first pass over a fresh destination succeeds", first["success"], str(first.get("errors")))
 
-    # Same files, same destination -- but a mapping CSV with no history, so
-    # every patient mints a brand new ID for files already filed under another.
-    # The ledger is carried across, which is what makes the clash visible.
-    other_csv = os.path.join(dest, "other_mapping.csv")
-    shutil.copyfile(
-        ac.ledger_path_for_mapping_csv(engine.get_mapping_csv_path(study, None, dest)),
-        ac.ledger_path_for_mapping_csv(other_csv),
-    )
+    # Re-key one patient's row so their files look like they belong to
+    # somebody else. Re-running then finds this folder's fingerprint already
+    # recorded against a different identity.
+    csv_path = engine.get_mapping_csv_path(study, None, dest)
+    store = ac.MappingStore.load_or_create(csv_path)
+    victim = next(r for r in store.rows if r.get("Source Fingerprint"))
+    victim["Original CR No"] = victim["Original CR No"] + "-OTHER"
+    store.save()
 
-    second = run(study, src, dest, mapping_csv=other_csv)
+    second = run(study, src, dest)
     s = second["summary"]
-    print(f"  -> {s['conflicts']} conflicting file(s), verdicts {verdicts(second)}")
-    check("re-filing under a new ID is a conflict, not a duplicate",
-          s["conflicts"] > 0 and s["skipped_duplicates"] == 0)
+    print(f"  -> {s['conflicts']} conflict(s), verdicts {verdicts(second)}")
+    check("the clash is reported as a conflict", s["conflicts"] > 0)
     warns = [w for p in second["patients"] for w in (p.get("warnings") or [])]
     check("the conflict is explained to the operator",
-          any("different Anonymized ID" in w for w in warns))
+          any("different patient" in w for w in warns), str(warns[:1]))
     if warns:
-        print(f"     {warns[0][:160]}...")
+        print(f"     {warns[0][:150]}...")
     check("nothing is silently skipped -- the files are still processed",
           all(p["preview_pairs"] for p in second["patients"]))
 
 
-def scenario_ledger_placement(study, dest):
-    print(f"\n=== {study.upper()}: where the ledger landed ===")
+def scenario_one_file_only(study, dest):
+    """The mapping CSV is the whole session memory -- no sidecar file."""
+    print(f"\n=== {study.upper()}: the CSV is the only session file ===")
     csv_path = engine.get_mapping_csv_path(study, None, dest)
-    ledger = ac.ledger_path_for_mapping_csv(csv_path)
     out_root = engine.get_output_root(study, dest)
     print(f"  mapping: {csv_path}")
-    print(f"  ledger : {ledger}")
-    check("the ledger exists", os.path.exists(ledger))
-    check("it sits beside the mapping CSV", os.path.dirname(ledger) == os.path.dirname(csv_path))
-    check("it is NOT inside the shareable output folder",
-          not os.path.normcase(ledger).startswith(os.path.normcase(out_root) + os.sep))
-    leaked = [f for _d, _s, fs in os.walk(out_root) for f in fs if f.endswith(".json")]
-    check("no copy of it leaked into the output folder", not leaked, str(leaked))
+    check("the mapping CSV exists", os.path.exists(csv_path))
+
+    sidecars = [os.path.join(dp, f) for dp, _d, fs in os.walk(dest)
+                for f in fs if f.endswith(".json")]
+    check("no sidecar JSON is written anywhere", not sidecars, str(sidecars))
+
+    store = ac.MappingStore.load_or_create(csv_path)
+    have_fp = sum(1 for r in store.rows if r.get("Source Fingerprint"))
+    check("every patient row carries a fingerprint",
+          have_fp == len(store.rows), f"{have_fp} of {len(store.rows)}")
+    check("the CSV is NOT inside the shareable output folder",
+          not os.path.normcase(csv_path).startswith(os.path.normcase(out_root) + os.sep))
 
     d = engine.describe_session(None, dest, study)
-    print(f"  describe_session: {d['existing_patients']} patient(s), {d['processed_files']} file(s) on record")
-    check("describe_session reports the ledger", d["processed_files"] > 0)
+    print(f"  describe_session: {d['existing_patients']} patient(s) on record")
+    check("describe_session sees them", d["existing_patients"] > 0)
+
+
+def scenario_older_csv_still_loads(study, dest):
+    """A mapping CSV written before the fingerprint column existed must still
+    load: the column is additive, not required."""
+    print(f"\n=== {study.upper()}: a CSV from before the fingerprint column ===")
+    legacy = os.path.join(dest, "legacy_mapping.csv")
+    with open(legacy, "w", newline="", encoding="utf-8") as f:
+        f.write("S. No,Original CR No,Anonymized ID,Name\n")
+        f.write("1,331012601306032,ABCD1234,Some Patient\n")
+    try:
+        store = ac.MappingStore.load_or_create(legacy)
+        loaded = len(store.rows) == 1
+        reused = store.get_or_assign("331012601306032", "Some Patient") == ("ABCD1234", False)
+        blank = store.get_fingerprint("331012601306032") == ""
+        store.set_fingerprint("331012601306032", "deadbeef")
+        store.save()
+        upgraded = ac.MappingStore.load_or_create(legacy).get_fingerprint("331012601306032") == "deadbeef"
+    except Exception as exc:  # noqa: BLE001
+        check("an older CSV still loads", False, str(exc))
+        return
+    check("an older CSV still loads", loaded)
+    check("its existing IDs are still reused", reused)
+    check("its patients simply have no fingerprint yet", blank)
+    check("saving upgrades it in place", upgraded)
 
 
 for study_name, source in (("kfre", os.path.join(NIMS, "KFRE")), ("egfr", os.path.join(NIMS, "eGFR"))):
@@ -238,9 +270,10 @@ for study_name, source in (("kfre", os.path.join(NIMS, "KFRE")), ("egfr", os.pat
         continue
     destination = scenario_same_files_twice(study_name, source)
     scenario_deleted_output(study_name, source, destination)
-    scenario_partial_followup(study_name, source)
-    scenario_ledger_placement(study_name, destination)
-    scenario_wrong_mapping_csv(study_name, source)
+    scenario_added_file(study_name, source)
+    scenario_one_file_only(study_name, destination)
+    scenario_older_csv_still_loads(study_name, destination)
+    scenario_duplicate_subject(study_name, source)
 
 print("\n" + "=" * 62)
 if failures:

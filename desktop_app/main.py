@@ -120,13 +120,10 @@ class Api:
         becomes a second patient. Hence a dedicated picker rather than an
         implied default the operator never sees.
 
-        A companion file sits next to it -- <same name>_processed_files.json,
-        the record of which files have already been anonymized (see
-        anon_common.ledger_path_for_mapping_csv). Only the CSV is picked
-        here, because the companion is found from the CSV's own path; but
-        the two must be COPIED together when a mapping is moved between
-        machines, or repeat submissions stop being recognised. The session
-        panel says so when the companion is missing.
+        This one file is the whole session memory: the ID mapping, and the
+        fingerprint of what each patient was last anonymized from (see
+        anon_common.fingerprint_files), which is what tells a follow-up
+        visit apart from the same documents handed over twice.
         """
         window = webview.windows[0]
         result = window.create_file_dialog(
@@ -396,38 +393,43 @@ def self_test() -> int:
         except Exception as exc:  # noqa: BLE001
             problems.append(f"{module} is not importable in this build: {exc}")
 
-    # Repeat detection, exercised end to end on a throwaway file rather than
-    # merely imported: a broken ledger here would not crash anything, it
-    # would quietly re-anonymize work already done, which is precisely the
-    # class of failure nobody notices until the output folder is wrong.
+    # Repeat detection, exercised end to end rather than merely imported: a
+    # broken fingerprint here would not crash anything, it would quietly
+    # re-anonymize work already done, which is the class of failure nobody
+    # notices until the output folder is wrong.
     try:
         import anon_common as _ac
 
         with tempfile.TemporaryDirectory() as tmp:
-            probe = os.path.join(tmp, "probe.bin")
-            with open(probe, "wb") as f:
-                f.write(b"repeat-detection self-test")
-            digest = _ac.sha256_file(probe)
+            a = os.path.join(tmp, "a.bin")
+            b = os.path.join(tmp, "b.bin")
+            for path, blob in ((a, b"first"), (b, b"second")):
+                with open(path, "wb") as f:
+                    f.write(blob)
 
-            ledger = _ac.ProcessedFileLedger.load_or_create(
-                _ac.ledger_path_for_mapping_csv(os.path.join(tmp, "probe_Mapping.csv"))
-            )
-            fresh = _ac.classify_repeat([("probe.bin", digest, 26)], "TEST1234", ledger, True)
-            ledger.record(digest, anon_id="TEST1234", study="egfr", name="probe.bin", size=26)
-            ledger.save()
+            same = _ac.fingerprint_files([a, b]) == _ac.fingerprint_files([b, a])
+            changed = _ac.fingerprint_files([a, b]) != _ac.fingerprint_files([a])
 
-            reloaded = _ac.ProcessedFileLedger.load_or_create(ledger.path)
-            same = _ac.classify_repeat([("probe.bin", digest, 26)], "TEST1234", reloaded, True)
-            other = _ac.classify_repeat([("probe.bin", digest, 26)], "OTHER999", reloaded, True)
+            csv_path = os.path.join(tmp, "probe_Mapping.csv")
+            store = _ac.MappingStore.load_or_create(csv_path)
+            anon_id, _is_new = store.get_or_assign(original_key="TESTKEY", name="Probe")
+            store.set_fingerprint("TESTKEY", _ac.fingerprint_files([a, b]))
+            store.save()
 
-        if fresh.verdict != "new":
-            problems.append(f"an unseen file was not treated as new (got {fresh.verdict!r})")
-        if not same.skip:
-            problems.append(f"a repeat submission was not recognised (got {same.verdict!r})")
-        if not other.conflicts:
-            problems.append("a file re-filed under a different Anonymized ID was not flagged")
-        print(f"repeat detection: OK (new -> {fresh.verdict}, repeat -> {same.verdict}, "
-              f"{len(other.conflicts)} conflict(s) caught)")
+            reloaded = _ac.MappingStore.load_or_create(csv_path)
+            persisted = reloaded.get_fingerprint("TESTKEY") == _ac.fingerprint_files([a, b])
+            id_kept = reloaded.get_or_assign(original_key="TESTKEY", name="Probe")[0] == anon_id
+
+        if not same:
+            problems.append("a fingerprint changed with file order, so a repeat would not be recognised")
+        if not changed:
+            problems.append("a fingerprint did NOT change when the file set changed -- new data would be skipped")
+        if not persisted:
+            problems.append("the fingerprint did not survive a save/load of the mapping CSV")
+        if not id_kept:
+            problems.append("the Anonymized ID did not survive a save/load of the mapping CSV")
+        print(f"repeat detection: OK (order-independent={same}, set-sensitive={changed}, "
+              f"persists in CSV={persisted})")
     except Exception as exc:  # noqa: BLE001
         problems.append(f"repeat detection is broken in this build: {exc}")
         traceback.print_exc()

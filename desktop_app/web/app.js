@@ -193,18 +193,13 @@ function renderSession(info) {
   if (info.continuing) {
     els.csvState.textContent = "Continuing";
     els.csvState.className = "session-state is-good";
-    // The file count is the repeat check: a known patient could be a
-    // follow-up OR the same documents again, and only that record tells
-    // them apart. Say so when it is missing too -- a mapping CSV carried
-    // over WITHOUT its companion file looks completely normal otherwise,
-    // and the first sign of trouble would be already-done patients being
-    // quietly redone.
-    const known = info.processed_files
-      ? ` ${info.processed_files} file(s) already anonymized are on record, so the same documents handed in again are recognised instead of redone.`
-      : " No record of previously anonymized files sits next to this CSV, so re-submitted documents cannot be recognised. Copy the matching _processed_files.json file alongside it if you have one.";
+    // This same file also records what each patient was last anonymized
+    // from, which is what tells a follow-up visit apart from the same
+    // documents being handed in twice.
     els.csvHint.textContent =
       `${info.existing_patients} patient(s) already in this mapping. A returning patient keeps their existing ` +
-      `Anonymized ID, and any new ID is checked against all ${info.existing_ids} already issued.` + known;
+      `Anonymized ID, any new ID is checked against all ${info.existing_ids} already issued, and files that ` +
+      `were already anonymized are recognised instead of being redone.`;
   } else {
     els.csvState.textContent = csvChosen ? "Empty file" : "New mapping";
     els.csvState.className = `session-state ${csvChosen ? "is-warn" : ""}`;
@@ -578,8 +573,8 @@ function renderBatchResult(result, studyLabel) {
   const repeats = dup
     ? ` ${dup} of them were the same files as before and were left exactly as they are.`
     : "";
-  const partial = s.partial_repeats
-    ? ` ${s.partial_repeats} had some files already done and some new.`
+  const partial = s.rewritten_repeats
+    ? ` ${s.rewritten_repeats} had been done before but their output was missing, so it was written again.`
     : "";
   els.resultBanner.innerHTML = `
     <strong>Batch anonymization (${studyLabel}): ${escapeHTML(String(s.succeeded || 0))} of
@@ -606,7 +601,7 @@ function renderBatchResult(result, studyLabel) {
     const statusLabel = isDuplicate
       ? "Already done"
       : p.success
-        ? (repeat.verdict === "partial" ? "Anonymized (+repeats)" : "Anonymized")
+        ? "Anonymized"
         : (p.anon_id ? "Partly written" : "Not processed");
     const statusClass = isDuplicate ? "dup" : p.success ? "ok" : (p.anon_id ? "warn" : "fail");
     const canReview = fileCount > 0;

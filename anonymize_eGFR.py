@@ -253,6 +253,10 @@ class PatientRecord:
     folder_label: str
     identity_key: Optional[str] = None
     identity_kind: Optional[str] = None  # "CR No" or "Lab No."
+    # The exact string this patient is filed under in the mapping CSV.
+    # Equal to identity_key for Template A; prefixed "Lab No.:" for
+    # Template B, which has no CR No -- see resolve_patient_identity().
+    mapping_key: Optional[str] = None
     name: Optional[str] = None
     anon_id: Optional[str] = None
     is_new_id: bool = False
@@ -711,6 +715,10 @@ def resolve_patient_identity(
     rec.name = name
 
     mapping_key = identity_key if identity_kind == "CR No" else f"Lab No.:{identity_key}"
+    # Kept on the record because it is NOT the same string as identity_key
+    # for Template B, and anything that later needs to find this patient's
+    # row must use the key the row was actually filed under.
+    rec.mapping_key = mapping_key
     anon_id, is_new = mapping.get_or_assign(mapping_key, name or "")
     rec.anon_id = anon_id
     rec.is_new_id = is_new
